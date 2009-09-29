@@ -1,9 +1,19 @@
-#!/usr/local/bin/perl
- 
+#!/usr/bin/perl
+
 # vmsgs 2.0 - An improvement for a drop-in replacement for Case's cool
 # clone of msgs(1).
- 
-# V 2.20 Messages are now seperated by 1000s (/var/msgs/13000.dir). 
+
+# V 2.31 Help screen wasn't clearing the window before writing to it
+#        (DoHelp).  Mail wasn't getting sent to the right address with remote
+#        postings (MailReply).  Return email address wasn't always right
+#        (PostMessage, Followup)  msgsrc is now centrally located. 
+#        InitMsgStat, aaaaggghhhh, main()) 7/30/97
+# V 2.30 Support for remote msg reading.  Lots of new stuff rewritten to 
+#        use the msgsd API (msgsd.pl)  (FirstMessage, NumMessages, 
+#        CreateMsgsArray, ReadMessage, PostMessage, Followup, MailReply,
+#        sigalrm, ShouldKillfile).  Msgs can be cached (CreateMsgsArray,
+#        ReadMessage, Followup, sigalrm) 7/29/97
+# V 2.20 Messages are now seperated by 1000s (/var/msgs/13000.dir).
 #        (CreateMsgsArray, PostMessage, Followup, ReadMessage, IncBoundsFile,
 #        sigalrm, ShouldKillFile, SearchMessages, GetMsgDir2(new)).
 #        Temoprary messages are now stored in the user's home directory
@@ -14,16 +24,16 @@
 #        want to forget the message, like in elm. (PostMessage)  3/12/97
 # V 2.11 Make it so the sig is added before it fires up the editor
 #        (PostMessage, Followup)   3/6/97
-# V 2.1  Added support for a .msgssig file (PostMessage, Followup, 
+# V 2.1  Added support for a .msgssig file (PostMessage, Followup,
 #        AppendSig(new)).  Preliminary work started on threading during read
 #        mode
 # V 2.00 Added 2 columns to the display so there's room for 5-digit msg IDs
 #        (PrintMsgInfoLine).  New msg notification now works correctly
 #        (sigalrm).
-# V 1.95 Fixed an oversight where it'd get into an endless loop if you killfile 
+# V 1.95 Fixed an oversight where it'd get into an endless loop if you killfile
 #        everything (main()). Added -k flag to ignore the kill file
 #        (GetCommandLine, ReadKillfile).  Dosen't core dump when you ^C
-#        (aaaaggghhhh).  Fixed the segfault returning from search mode - 
+#        (aaaaggghhhh).  Fixed the segfault returning from search mode -
 #        forgot a local() (SearchMessages).  Message count on the title
 #        bar is now always correct (SelectMessage).  Did an audit of calls
 #        to refresh(), touchwin() and clear() to try and get rid of some
@@ -55,25 +65,24 @@
 # V 1.01 Changed GetAChar so it dosen't echo the character you get.
 #        Added some keypress aliases. Added signal handlers.
 # V 1.00 Original release.
- 
+
 $DEBUG=0;
- 
+
 if ($DEBUG) {
 open(DEBUG,">newmsgsdebug");
 select(DEBUG);
 $|=1;
 select(STDOUT);
 }
- 
-&DEBUG("DEBUG output from newmsgs\n");
 
+&DEBUG("DEBUG output from newmsgs\n");
 use Curses;
- 
+
+push(@INC,".");
+require "msgs.pl";
+
 $|=1;
- 
-$0="vmsgs: big time sink";
-$VERSION="2.20 Release";
- 
+
 $SIG{'HUP'}=\&aaaaggghhhh;
 $SIG{'INT'}=\&aaaaggghhhh;
 $SIG{'TERM'}=\&aaaaggghhhh;
@@ -84,6 +93,10 @@ umask(022);  # world and group readable
 
 &GetCommandLine();
 
+if ($opt_h) {
+  &DoCommandLineHelp();
+}
+
 # This is the directory all the messages are stored in
 $msgdir="/var/msgs";
 
@@ -92,6 +105,18 @@ $recurse_select=0;
 
 # Did sigalrm notice any new messages last time through?
 $newmessages=0;
+
+$LOCAL = ! $opt_r;  # Local and remote reading
+$OLDSCHOOL=0;  # For the msgs.pl library
+$BOUNDS="/var/msgs/.bounds";
+$MSGSDIR="/var/msgs/";
+$AUTHOR = $LOCAL ? $ENV{'USER'} : &GetLucienLogin;
+&DEBUG("Reading is REMOTE!!\n") if (!$LOCAL);
+&DEBUG("Reading is LOCAL!!\n") if ($LOCAL);
+&InitializeMsgsAPI();
+
+$0="vmsgs: big time sink";
+$VERSION="2.31 Release";
 
 %msgstat=&InitMsgStat();
 &ReadKillfile();
@@ -105,21 +130,25 @@ if (keys(%master_msg_hash) == ()) {
     $msgstat{currmsg}--;
   }
 }
- 
+
 $curses_on=1;
 %screen=&InitCursesWindows();
- 
+
 alarm(60);
- 
+
 $done=0; # Set $done to 1 to flag that we're all done
 do {
   &MainScreen();
 } until ($done);
- 
+
 DoneCursesWindows(%screen);
-&WriteMsgsrc($msgstat{maxmsg}+1);
+&SetRC($msgstat{maxmsg}+1);
 exit(0);
- 
+
+#
+# End of the main script. Functions follow from here.
+#
+
 sub InitMsgStat {
 # Initializes the msgstat structure which includes:
 # $msgstat{currmsg} : The current (usu. highlited) message
@@ -127,8 +156,9 @@ sub InitMsgStat {
 # $msgstat{firstmsg}: The ID number of the first message (from .bounds)
 # $msgstat{lastmsg} : The ID number of the last message
 local(%msgstat);
- 
-  $msgstat{currmsg}=&ReadMsgsrc();
+
+  $msgstat{currmsg}=&ReadRC();
+&DEBUG("InitMsgStat: currmsg is " . $msgstat{currmsg} . "\n");
   $msgstat{maxmsg}=$msgstat{currmsg} - 1;
   if ($opt_all) {
     $msgstat{firstmsg}=&FirstMessage();
@@ -136,18 +166,18 @@ local(%msgstat);
     $msgstat{firstmsg}=$msgstat{currmsg} - 100;
   }
   $msgstat{lastmsg}=&NumMessages();
- 
+
   if ($msgstat{currmsg} > $msgstat{lastmsg}) {
     $msgstat{currmsg}=$msgstat{lastmsg};
   }
- 
+
   return %msgstat;
 } # end InitMsgStat
- 
-sub ReadMsgsrc() {
+
+sub FOO_ReadMsgsrc() {
 # Returns the number that's in the .msgsrc file
 local(@stuff,$rcfile,$num);
- 
+
   $rcfile=$ENV{'HOME'} . "/.msgsrc";
   open(RC,"$rcfile") || return 1;
   chop($num=<RC>);
@@ -156,18 +186,20 @@ local(@stuff,$rcfile,$num);
     $num=1;
   }
   close(RC);
- 
+
+  &DEBUG("Returning $num in ReadMsgsrc\n");
+
   return $num;
 } # end ReadMsgsrc
- 
- 
-sub WriteMsgsrc {
+
+
+sub FOO_WriteMsgsrc {
 # Saves the number passed as the first arg to the .msgsrc file
 local($num)=@_;
 local(@stuff,$rcfile);
- 
+
 &DEBUG("In WriteMsgsrc($num)\n");
- 
+
   $rcfile=$ENV{'HOME'} . "/.msgsrc";
   open(RC,">$rcfile") || &DEBUG("Can't open $rcfile for writing!");
   print RC "$num\n";
@@ -183,7 +215,7 @@ my($killfrom,$killsubject,$killuid,$msgdir2);
 
   &DEBUG("In ShouldKillfile\($msgnum\)\n");
   &DEBUG("from $from subject $subject uid $uid\n");
- 
+
   foreach $killfrom (keys(%kill_from)) {
     if ($from =~ m/$killfrom/) {
       &DEBUG("killing from\n");
@@ -197,32 +229,29 @@ my($killfrom,$killsubject,$killuid,$msgdir2);
       return 1;
     }
   }
-  
+
   foreach $killsubject (keys(%kill_subject)) {
     if ($subject =~ m/$killsubject/) {
       &DEBUG("killing subject\n");
       return 1;
     }
-  } 
+  }
 
   if (keys(%kill_any) == ()) {
     return 0;
   } else {
-    $msgdir2=&GetMsgDir2($msg);
-    open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msgnum");
-    while ((!eof(MSG)) && (($_=<MSG>) ne "\n")) { ; } # Skip headers
+    my(@text);
 
-    while ($msgline=<MSG>) {
+    @text=&GetMessage($msg);
+    foreach $msgline ( @text ) {
       if (grep($msgline =~ /$_/,keys(%kill_any))) {
-        close(MSG);
         return 1;
       }
     }
   }
+
   return 0;
 } # end ShouldKillfile
-
-
 
 sub CreateMsgsArray {
 # Creates the %messages hash. keys are message numbers. The keys dereference
@@ -231,11 +260,11 @@ sub CreateMsgsArray {
 # killed
 
 my($from,$date,$subject,$uid,$numlines,$msg,$anys,$msgline,$msgdir2,$pathname);
-my(@twirly);
+my($email,@twirly,$text,$header);
 local(%messages);
 
   @twirly = ("-","\\","|","/");
- 
+
   print "\nLoading messages database  ";
 
 STATS_MESSAGE:
@@ -247,18 +276,26 @@ STATS_MESSAGE:
   $msgstat{lastmsg}=&NumMessages();
   foreach $msg ( $msgstat{firstmsg} .. $msgstat{lastmsg} ) {
 
-    print "\cH" . $twirly[int($msg/40) % 4] ;
+    print "\cH" . $twirly[int($msg/($LOCAL ? 40 : 10)) % 4] ;
 
-    $msgdir2=&GetMsgDir2($msg);
-&DEBUG("\$msgdir2 is $msgdir2  full pathname is $msgdir/$msgdir2/$msg\n");
-&DEBUG("Extended directory location found\n") if (-f "$msgdir/$msgdir2/$msg");
-    open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg") || next;
+&DEBUG("CreateMsgsArray: parsing msg $msg\n");
+
+    my(@header)=&GetHeader($msg);
+    $header=\@header;
+
+&DEBUG("CreateMsgsArray: " . scalar(@header) . " headers\n");
+    
     $numlines=0;
-    while((!eof(MSG)) && (($_ = <MSG>) ne "\n")) { # Read all headers
-      chop;
-      if (m/^from (\w+) (.*)$/i) {
+    foreach ( @header ) {
+      chomp;
+      if (m/^from (\w+) \((\S+)\) (.*)$/i) {
+        $from=$1;
+        $email=$2;
+        $date=$3;
+      } elsif (m/^from (\w+) (.*)$/i) {
         $from=$1;
         $date=$2;
+        $email="";
       } elsif (m/^subject\: (.*)/i) {
         $subject=$1;
       } elsif (m/^followup\-to\: (\d*)/i) {
@@ -269,24 +306,40 @@ STATS_MESSAGE:
         $numlines=$1;
       }
     }
-    $uid=(stat("$msgdir/$msg"))[4];
+    $uid = $LOCAL ? (stat("$msgdir/$msg"))[4] : -1;
+ 
+    {
+      my(@text)=&GetBody($msg);
+      $text=\@text;
 
-    # Now find out how many lines are in this message
-    if ($numlines == 0) {
-      while (<MSG>) {
-        $numlines++;
+      # Now find out how many lines are in this message
+      if ($numlines == 0) {
+        $numlines = scalar(@{$text});
       }
     }
 
-    close(MSG);
+&DEBUG("CreateMsgsArray: " . $numlines . " lines in body\n");
 
     if (! ShouldKillfile($msg,$from,$subject,$uid)) {
       $messages{$msg}->{from}=$from;
       $messages{$msg}->{date}=$date;
-      $messages{$msg}->{$uid}=$uid;
+      $messages{$msg}->{uid}=$uid;
       $messages{$msg}->{subject}=$subject;
       $messages{$msg}->{numlines}=$numlines;
       $messages{$msg}->{followup}=$followup;
+      $messages{$msg}->{email}=$email;
+     
+      # If remote, we've already sucked up the message
+      if ((!$LOCAL || $opt_c) && !$opt_n) {
+&DEBUG("Caching the message\n");
+        $messages{$msg}->{text}=$text;
+        $messages{$msg}->{header}=$header;
+      } else {
+&DEBUG("Not Caching the message\n");
+        # If local, we'll suck it later, to save memory
+        $messages{$msg}->{text}=0;
+        $messages{$msg}->{header}=0;
+      }
 
       push(@{$messages{$followup}->{follows}},$msg);
     } else {
@@ -297,7 +350,8 @@ STATS_MESSAGE:
   print "\n";
   return %messages;
 }  # end CreateMsgsArray
- 
+
+
 sub ReadKillfile {
 # Reads in the killfile .msgskill and creates the %kill_subject, %kill_from
 # and %kill_any arrays
@@ -307,7 +361,7 @@ my(@stuff,$killfile);
     &DEBUG("Skipping kill file 'cause of -k switch\n");
     return;
   }
- 
+
   &DEBUG("In ReadKillFile\n");
 
   $killfile=$ENV{'HOME'} . "/.msgskill";
@@ -334,52 +388,63 @@ my(@stuff,$killfile);
   }
   close(KILL);
 } # end ReadKillfile
- 
- 
+
+
 sub FirstMessage {
 # Returns the number of the first message
-local($num);
- 
-  open(BOUNDS,"$msgdir/.bounds");
-  ($num)=(scalar(<BOUNDS>) =~ m/^(\d+)\s/);
-  close(BOUNDS);
-  return $num;
-}  # end FirstMessage
- 
+  my(@array);
+
+  @array=&GetBounds();
+  if (! @array) {
+    &DEBUG("FirstMessage: GetBounds array is null?!?\n");
+    return 1;
+  } else {
+
+&DEBUG(join("| |","FirstMessage: array is",@array,"\n"));
+    return $array[0];
+  }
+}
+
 sub NumMessages{
 # Returns the highest message ID
-local($maxnum);
- 
-  open(BOUNDS,"$msgdir/.bounds");
-  ($maxnum)=(scalar(<BOUNDS>) =~ m/^\d+\s(\d+)/);
-  close(BOUNDS);
-  return $maxnum;
-} # end NumMessages
- 
- 
+  my(@array);
+
+  @array=&GetBounds();
+&DEBUG("NumMessages: array length is " . scalar(@array) . "\n");
+&DEBUG("NumMessages: array is |" . $array[0] . "|" . $array[1] . "|\n");
+  if (! @array) {
+    &DEBUG("NumMessages: GetBounds array is null?!?\n");
+    return 10000;
+  } else {
+&DEBUG(join("| |","NumMessages: array is",@array,"\n"));
+    return $array[1];
+  }
+}
+
+
 sub InitCursesWindows {
 # Initialzes the Curses stuff and creates the message selection screen
 # composed of the titlebar (vmsgs V2.0    xxx messages yyy new)
 # selection screen (number: author  lines  title)
 # and bottom bar (-- time -- mode -- some keys -- %displayed --)
 my(%screen);
- 
+
   initscr();  # Init curses stuff
   cbreak(); # Turn on cbreak mode
   noecho();
- 
+
   return(%screen);
 }
- 
+
 sub MainScreen {
 # Displays the titlebar, bottombar and goes into selection mode
- 
+
   $msgstat{mode}="selection";
- 
+
   &SelectMessage(\%master_msg_hash);
 } # end MainScreen
- 
- 
+
+
 sub GetANumber {
 # Called by SelectMessage when you try to type in a number. The first arg is
 # the first number you typed. GetANumber returns the number or 0 if escape
@@ -387,17 +452,17 @@ sub GetANumber {
 # from
 my($workspace,$msghash)=@_;
 my($char,$numberwin,$lowkey,$highkey);
- 
+
   $lowkey=&GetLowestKey(%{$msghash});
   $highkey=&GetHighestKey(%{$msghash});
 
   $numberwin=newwin(5,50,(int($LINES/2)-2),(int($COLS/2)-25));
- 
+
   do {
     addstr($numberwin,2,2,"Goto message number: $workspace");
     clrtoeol($numberwin);
     box($numberwin,"|","-");
- 
+
     do {
       refresh($numberwin);
       $char=getch();
@@ -414,7 +479,7 @@ my($char,$numberwin,$lowkey,$highkey);
         return 0;
       }
     } until ($char eq "\n");
- 
+
     if ($workspace eq "") {
       return 0;
     } elsif ( ($workspace > $highkey) ||
@@ -470,7 +535,7 @@ my($screen,$msgnum,$msghash)=@_;
          . "\n");
 
   attroff($screen,A_BOLD);
-}
+} # end PrintMsgInfoLine
 
 sub DisplaySelectScreen {
 # Called by SelectMessage to create the selection screen. SelectMessage
@@ -481,7 +546,7 @@ my($screen,$currmsg,$msghash)=@_;
 &DEBUG("In DisplaySelectScreen. \$currmsg is $currmsg\n");
 
   my($numprinted,$msgindex,$printmsg,$fromtop,$firstprinted,$lastprinted);
-  
+
   move($screen,0,0);
   $numprinted=0;
 
@@ -537,7 +602,7 @@ my($screen,$currmsg,$msghash)=@_;
 sub NextMessageForward {
 # Scans forward from the given message number for the next valid number
 my($currmsg,$msghash,$highkey)=@_;
- 
+
   do {
     $currmsg++;
   } until (defined($msghash->{$currmsg}) || ($currmsg > $highkey));
@@ -663,12 +728,12 @@ local($titlebar,$bottombar,$currentscreen)=();
   $titlebar=newwin(1,0,0,0) || die "titlebar";
   scrollok($titlebar,0);
   $bottombar=newwin(1,0,$LINES-1,0) || die "bottombar";
- 
+
   # Create the selection window
   $currentscreen=newwin($LINES-2,0,1,0); # leave room for top and bot
 &DEBUG("SelectMessage: \$recurse_select is $recurse_select \$currentscreen is $currentscreen\n");
   scrollok($currentscreen,0); # No auto-scrolling
- 
+
   # Adjust currmsg depending on what's in %msghash
   if (!defined($msghash->{$msgstat{currmsg}})) {
     foreach $msgindex ( $msgstat{curmsg} .. $highkey ) {
@@ -678,10 +743,16 @@ local($titlebar,$bottombar,$currentscreen)=();
       }
     } # end foreach
   }
-   
+
     # Create the title bar
     attron($titlebar,A_REVERSE);
-    addstr($titlebar,"vmsgs $VERSION" . " "x(($COLS/2)-6));
+    #addstr($titlebar,"vmsgs $VERSION" . " "x(($COLS/2)-6));
+    addstr($titlebar,"vmsgs $VERSION ");
+    if ($LOCAL) {
+      addstr($titlebar,"(local)           ");
+    } else {
+      addstr($titlebar,"(from $SERVER)    ");
+    }
 
     # Create the bottom bar
     clear($bottombar);
@@ -706,9 +777,9 @@ local($titlebar,$bottombar,$currentscreen)=();
       addstr($bottombar,"$percentshown\%");
     }
     addstr($bottombar," ----\cH\cH\cH\cH\cH");
- 
+
 &DEBUG("\$msgstat{currmsg}:$msgstat{currmsg}\n");
- 
+
     # Create the selection screen
     ($firstprinted,$fromtop,$lastprinted)=
       &DisplaySelectScreen($currentscreen,$msgstat{currmsg},$msghash);
@@ -716,7 +787,7 @@ local($titlebar,$bottombar,$currentscreen)=();
 #    refresh($currentscreen);
     refresh($titlebar);
     refresh($bottombar);
- 
+
   do { # until key is (Q)uit
 
   # Create the titlebar
@@ -742,7 +813,7 @@ local($titlebar,$bottombar,$currentscreen)=();
   if ($percentshown >= 100) {
     addstr($bottombar,"ALL");
   } else {
-    addstr($bottombar,"$percentshown\%"); 
+    addstr($bottombar,"$percentshown\%");
   }
   refresh($bottombar);
 &DEBUG("\$percentshown: $percentshown \$msgstat{currmsg}: $msgstat{currmsg}\n");
@@ -775,7 +846,7 @@ do { # until hit a legal key
       ($firstprinted,$fromtop,$lastprinted)=&DisplaySelectScreen(
              $currentscreen,$msgstat{currmsg},$msghash);
 
-      $newmsgs=$highkey-$msgstat{maxmsg};   
+      $newmsgs=$highkey-$msgstat{maxmsg};
       if ($newmsgs != $oldnewmsgs) {
         addstr($titlebar,"\cH\cH\cH\cH" . " "x(4-length($newmsgs)) . "$newmsgs");
       }
@@ -784,7 +855,7 @@ do { # until hit a legal key
     } elsif ($c =~ m/n/i) { # Post or New
       $legalkey=1;
       &PostMessage();
-      &sigalrm();  # Read new messages into hash 
+      &sigalrm();  # Read new messages into hash
       if ($recurse_select == 1) {
         $msghash=\%master_msg_hash;
       }
@@ -882,7 +953,7 @@ do { # until hit a legal key
       refresh($currentscreen);
     } # end of elsif for entering numbers
 } until ($legalkey);
- 
+
   } until ($c =~ m/q/i);  # end do
 
   delwin($titlebar);
@@ -898,15 +969,15 @@ sub SearchMessages {
 my($msghash)=@_;
 my($lastmode,$searchby,$key,$msg,$msgdir2,%newhash);
 local($currentscreen);
- 
+
   $lastmode=$msgstat{mode};
   $msgstat{mode}="search";
- 
+
   $currentscreen=newwin(6,60,(int($LINES/2)-3),(int($COLS/2)-30));
   addstr($currentscreen,0,3,"Search Messages");
   addstr($currentscreen,2,3,"Search by (A)uthor, (S)ubject or (W)hole message:");
   addstr($currentscreen,3,3,"Regex string:");
- 
+
   do {
 SEARCH_TRY_AGAIN:
     move($currentscreen,3,16);
@@ -916,7 +987,7 @@ SEARCH_TRY_AGAIN:
     box($currentscreen,"|","-");
 &DEBUG("refresh 877\n");
     refresh($currentscreen);
- 
+
     echo();
     $searchby=getch($currentscreen,2,53);
     noecho();
@@ -925,11 +996,11 @@ SEARCH_TRY_AGAIN:
       addstr($currentscreen,1,3,"You must enter an 'A', 'S' or 'W'");
     }
   } until ($searchby =~ m/[asw]/i);
- 
+
   echo();
   getstr($currentscreen,3,16,$key);
   noecho();
- 
+
   foreach $msg (keys(%{$msghash})) {
     if ($searchby =~ m/a/i) {
       if ($msghash->{$msg}->{from} =~ m/$key/) {
@@ -940,18 +1011,26 @@ SEARCH_TRY_AGAIN:
         $newhash{$msg}=$msghash->{$msg};
       }
     } else { # search by any
-      $msgdir2=GetMsgDir2($msg);
-      open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg");
-      while(<MSG>) {
-        if (m/$key/) {
-          $newhash{$msg}=$msghash->{$msg};
-          last;
+      if ($msghash->{$msg}->{text}) {  
+        # We've already sucked up this msg...
+
+        foreach ( @{$msghash->{$msg}->{text}} ) {
+          if (m/$key/) {
+            $newhash{$msg}=$msghash->{$msg};
+            last;
+          }
         }
-      } # end while(<MSG>)
-      close(MSG);
+      } else { # We must be running locally...
+        foreach (&GetBody($msg)) {
+          if (m/$key/) {
+            $newhash{$msg}=$msghash->{$msg};
+            last;
+          }
+        } # end foreach(<MSG>)
+      } 
     }
   } # end foreach $msg
- 
+
   delwin($currentscreen);
 
   if (scalar(keys(%newhash)) == 0) {
@@ -964,103 +1043,98 @@ SEARCH_TRY_AGAIN:
 
     delwin($currentscreen);
   } else {
- 
+
     $msgstat{mode}="SearchSelect";
     $oldcurrmsg=$msgstat{currmsg};
     # set currmsg to the first matching
-    ($msgstat{currmsg})=(sort(numerically keys(%newhash)))[0];  
+    ($msgstat{currmsg})=(sort(numerically keys(%newhash)))[0];
     &SelectMessage(\%newhash);
     $msgstat{currmsg}=$oldcurrmsg;
   }
- 
+
   $msgstat{mode}=$lastmode;
 } # end SearchMessages
- 
- 
+
+
 sub DoneCursesWindows {
 # Shuts down the curses stuff
 local(%screen)=@_;
- 
+
   echo();
   nocbreak();
   endwin();
   `stty echo`;
 }
- 
- 
+
+
 sub ReadMessage {
 
 # Start printing messages starting with $msgstat{currmsg}. The hash of
 # valid messages is passed in as the first arg
 my($msghash)=@_;
- 
-  my($numlines,$c,$msgsleft,$timestr,$lastmode,@themessage,$msgdir2);
+
+  my($numlines,$c,$msgsleft,$timestr,$lastmode,$msgdir2,$msgref,$msglen);
   my($from,$subject,$month,$date,$year,$percentdone,$legalkey,$showheader);
   local($titlebar,$bottombar,$currentscreen);
 
   $highkey=&GetHighestKey(%{$msghash});
   $lowkey=&GetLowestKey(%{$msghash});
- 
+
   $titlebar=newwin(1,0,0,0) || die "titlebar";
   scrollok($titlebar,0);
   $bottombar=newwin(1,0,$LINES-1,0) || die "bottombar";
 
 &DEBUG("In ReadMessage \$highkey: $highkey \$lowkey: $lowkey\n");
- 
+
   $lastmode=$msgstat{mode};
   $msgstat{mode}="reading";
- 
+
   $currentscreen=newwin($LINES-2,0,1,0);
 
   $showheader=0; # Default is don't show the headers
- 
+
   SHOW_ONE_MESSAGE:
   # Until done reading messages
-  while ($msgstat{currmsg} <= $highkey) { 
- 
+  while ($msgstat{currmsg} <= $highkey) {
+
 &DEBUG("In ReadMessage:SHOW_ONE_MESSAGE\n");
- 
-    @themessage=();   # Clear out the message buffer
- 
+
+    if ($showheader) {
+&DEBUG("Showing Header\n");
+      if ($msghash->{$msgstat{currmsg}}->{header}) {
+        $msgref=$msghash->{$msgstat{currmsg}}->{header};
+&DEBUG("preloaded header is $msgref\n");
+      } else {
+&DEBUG("Loading header...\n");
+        my(@themessage);
+        @themessage=&GetHeader($msgstat{currmsg});
+        $msgref=\@themessage;
+      }
+    } else {
+&DEBUG("Showing body\n");
+      if ($msghash->{$msgstat{currmsg}}->{text}) {
+        $msgref=$msghash->{$msgstat{currmsg}}->{text};
+&DEBUG("Preloaded body is $msgref\n");
+      } else {
+&DEBUG("Loading body...\n");
+        my(@themessage);
+        @themessage=&GetBody($msgstat{currmsg});
+        $msgref=\@themessage;
+      }
+    }
+
     # Keep track of the highest numbered message so far
     if ($msgstat{currmsg} > $msgstat{maxmsg}) {
       $msgstat{maxmsg}=$msgstat{currmsg};
     }
- 
+
     $numlines=0; # How many lines we've printed of this message
- 
-    # Read in the headers, print them out if $showheader is true
-    $msgdir2=&GetMsgDir2($msgstat{currmsg});
-    open(MSG,"$msgdir/$msgdir2/$msgstat{currmsg}") ||
-      open(MSG,"$msgdir/$msgstat{currmsg}") ||
-      &DEBUG("problem opening msgdir/$msgdir2/$msgstat{currmsg} or $msgdir/$msgstat{currmsg}\n");
-    while((!eof(MSG)) && (($_=<MSG>) ne "\n")) {
-      if ($showheader) {
-        chop;
-        $themessage[$#themessage + 1] = "$_";
-      }
-    }
-    # Add the blank line after headers
-    $themessage[$#themessage + 1] = "" if ($showheader);
 
     ($month,$date,$timestr,$year)=($msghash->{$msgstat{currmsg}}->{date} =~
                  m/\w+\s+(\w+)\s+(\d+)\s+(\d+\:\d+)\:\d+\s+(\d+)/);
-    
-        
-    while (<MSG>) { # read in the rest of the message
-      chop;
-      while (length($_) > $COLS) {  # try to format long lines better
-        $themessage[$#themessage + 1] = substr($_,0,$COLS);
-        substr($_,0,$COLS)="";
-      }
-      $themessage[$#themessage + 1]=$_;
-    }
-    close(MSG);
 
-    $showheader=0;
- 
 &DEBUG("ReadMessage point1\n");
- 
+
     # Create the titlebar
     attroff($titlebar,A_REVERSE);
     clear($titlebar);
@@ -1070,23 +1144,26 @@ my($msghash)=@_;
     addstr($titlebar,0,($COLS-20),"$date $month $year $timestr");
     refresh($titlebar); # This won't change during this message
 
-SHOW_ONE_PAGE:
-    while ($numlines <= ($#themessage + 1)) { # until done with this message
- 
-&DEBUG("In ReadMessage:SHOW_ONE_PAGE\n");
- 
+    $msglen = scalar(@{$msgref});
+    $numlines = 0;
+
+    SHOW_ONE_PAGE:
+    while ($numlines <= $msglen) {
+
+      &DEBUG("In ReadMessage:SHOW_ONE_PAGE\n");
+
       # create the message window
       clear($currentscreen);
-      addstr($currentscreen,join("\n",
-             @themessage[$numlines .. ($numlines + $LINES - 3)]));
+      addstr($currentscreen,join(($showheader && ! $LOCAL) ? "\n" : "", 
+             @{$msgref}[$numlines .. ($numlines + $LINES - 3)]));
       $numlines += ($LINES-3);
- 
+
 &DEBUG("ReadMessage: \$numlines is $numlines\n");
- 
+
       ($timestr)=(localtime() =~ m/\d (\d+\:\d+)/);  # Get the current time
       # How many more to go?
-      $msgsleft=$highkey-$msgstat{currmsg};  
- 
+      $msgsleft=$highkey-$msgstat{currmsg};
+
       # Create the bottom bar
       attroff($bottombar,A_REVERSE);
       clear($bottombar);
@@ -1099,7 +1176,9 @@ SHOW_ONE_PAGE:
       }
       addstr($bottombar," --help:?-- ");
 
-      $percentdone = ($#themessage == -1) ? 100 : int($numlines / ($#themessage+1) * 100);
+      $percentdone = (scalar(@{$msgref}) == 0) ?
+                     100 :
+                     int($numlines / scalar(@{$msgref}) * 100);
       if ($percentdone >= 100) {
         addstr($bottombar,"ALL --");
       } else {
@@ -1108,96 +1187,99 @@ SHOW_ONE_PAGE:
 &DEBUG("refresh 1064\n");
       refresh($currentscreen);
       refresh($bottombar);
- 
-do { # Until we get a legal key 
-      $legalkey=0;
-      # Get a key and do something
-      $c=getch();
- 
+
+      do { # Until we get a legal key
+        $legalkey=0;
+        # Get a key and do something
+        $c=getch();
+
 &DEBUG("ReadMessage: getch got a \"$c\"\n");
-      if ($c =~ m/[fr]/i) { # Followup or Reply
-        $legalkey=1;
-        &Followup($msgstat{currmsg});
+        if ($c =~ m/[fr]/i) { # Followup or Reply
+          $legalkey=1;
+          &Followup($msgstat{currmsg});
 &DEBUG("refresh 1077\n");
-        refresh($currentscreen);
-        &sigalrm();  # Reread new messages into hash
-      } elsif ($c =~ m/q/i) { # Quit
-        $legalkey=1;
-        $done=1 if ($c eq "Q");
-        delwin($currentscreen);
-        $msgstat{mode}=$lastmode;
-        delwin($titlebar);
-        delwin($bottombar);
-        return;
-      } elsif ($c eq "?") {
-        $legalkey=1;
-        &DoHelp($msgstat{mode});
+          refresh($currentscreen);
+          &sigalrm();  # Reread new messages into hash
+        } elsif ($c =~ m/q/i) { # Quit
+          $legalkey=1;
+          $done=1 if ($c eq "Q");
+          delwin($currentscreen);
+          $msgstat{mode}=$lastmode;
+          delwin($titlebar);
+          delwin($bottombar);
+          return;
+        } elsif ($c eq "?") {
+          $legalkey=1;
+          &DoHelp($msgstat{mode});
 &DEBUG("refresh 1091\n");
-        refresh($currentscreen);
-      } elsif (($c eq " ") || ($c eq "\n")) {
-        $legalkey=1;
-        next SHOW_ONE_PAGE;
-      } elsif ($c =~ m/[si]/i) {  # select or index
-        $legalkey=1;
-        delwin($currentscreen);
-        $msgstat{mode}=$lastmode;
-        delwin($titlebar);
-        delwin($bottombar);
-        return;
-      } elsif (($c eq "\cH") || ($c eq "\c?")) {  # Back 1 page
-        $legalkey=1;
-        $numlines -= ($LINES-2);
-        if ($numlines < 0) {
+          refresh($currentscreen);
+        } elsif (($c eq " ") || ($c eq "\n")) {
+          $legalkey=1;
+          next SHOW_ONE_PAGE;
+        } elsif ($c =~ m/[si]/i) {  # select or index
+          $legalkey=1;
+          delwin($currentscreen);
+          $msgstat{mode}=$lastmode;
+          delwin($titlebar);
+          delwin($bottombar);
+          return;
+        } elsif (($c eq "\cH") || ($c eq "\c?")) {  # Back 1 page
+          $legalkey=1;
+          $numlines -= ($LINES-2);
+          if ($numlines < 0) {
+            $numlines=0;
+          }
+          next SHOW_ONE_PAGE;
+        } elsif ($c =~ m/m/i) {  # mail reply
+          $legalkey=1;
+          &MailReply($msgstat{currmsg});
+          refresh($currentscreen);
+          &sigalrm();  # Reread new messages into hash
+        } elsif ($c =~ m/h/i) {  # print headers
           $numlines=0;
-        }
-        next SHOW_ONE_PAGE;
-      } elsif ($c =~ m/m/i) {  # mail reply
-        $legalkey=1;
-        &MailReply($msgstat{currmsg});
-        refresh($currentscreen);
-        &sigalrm();  # Reread new messages into hash
-      } elsif ($c =~ m/h/i) {  # print headers
-        $numlines=0;
-        $showheader=1;
-        next SHOW_ONE_MESSAGE;
-      } elsif ($c =~ m/n/i) {  # Next message
-        $legalkey=1;
-        # Search for the next valid message
-        $c=&NextMessageForward($msgstat{currmsg},$msghash,$highkey);
+          $showheader= ! $showheader;
+          next SHOW_ONE_MESSAGE;
+        } elsif ($c =~ m/n/i) {  # Next message
+          $showheader=0;
+          $legalkey=1;
+          # Search for the next valid message
+          $c=&NextMessageForward($msgstat{currmsg},$msghash,$highkey);
 &DEBUG("Skipping to next message \$msgstat{currmsg}: $msgstat{currmsg} \$c: $c\n");
-        if (($c == $msgstat{currmsg}) || ($msgstat{currmsg}>=$highkey)) {
-          delwin($currentscreen);
-          $msgstat{mode}=$lastmode;
-          delwin($titlebar);
-          delwin($bottombar);
-          return;
-        } else {  # If it changed...
-          $msgstat{currmsg}=$c;
-          next SHOW_ONE_MESSAGE
-        }
-      } elsif ($c =~ m/p/i) { # Previous message
-        $legalkey=1;
-        # Search for the first previous valid message
-        $c=&NextMessageBackward($msgstat{currmsg},$msghash,$lowkey);
+          if (($c == $msgstat{currmsg}) || ($msgstat{currmsg}>=$highkey)) {
+            delwin($currentscreen);
+            $msgstat{mode}=$lastmode;
+            delwin($titlebar);
+            delwin($bottombar);
+            return;
+          } else {  # If it changed...
+            $msgstat{currmsg}=$c;
+            next SHOW_ONE_MESSAGE
+          }
+        } elsif ($c =~ m/p/i) { # Previous message
+          $showheader=0;
+          $legalkey=1;
+          # Search for the first previous valid message
+          $c=&NextMessageBackward($msgstat{currmsg},$msghash,$lowkey);
 &DEBUG("Skipping to previous message \$msgstat{currmsg}: $msgstat{currmsg} \$c: $c\n");
-        if (($c == $msgstat{currmsg}) || ($msgstat{currmsg}<=$lowkey)) {
-          delwin($currentscreen);
-          $msgstat{mode}=$lastmode;
-          delwin($titlebar);
-          delwin($bottombar);
-          return;
-        } else  {  # If it changed...
-          $msgstat{currmsg}=$c;
-          next SHOW_ONE_MESSAGE
+          if (($c == $msgstat{currmsg}) || ($msgstat{currmsg}<=$lowkey)) {
+            delwin($currentscreen);
+            $msgstat{mode}=$lastmode;
+            delwin($titlebar);
+            delwin($bottombar);
+            return;
+          } else  {  # If it changed...
+            $msgstat{currmsg}=$c;
+            next SHOW_ONE_MESSAGE
+          }
         }
-      }
-} until ($legalkey);
+      } until ($legalkey);
 
     } # while $numlines < $#themessage
- 
+
+    $showheader=0;
     # Search for the next valid message
     $c=$msgstat{currmsg};
-     do { # ((! defined($msghash->{$c+1})) && (($c+1) <= $highkey)) {
+    do { 
       $c++;
     } until ( defined($msghash->{$c}) || ($c > $highkey));
 &DEBUG("ReadMessage: next \$msgstat{currmsg} is $msgstat{currmsg}\n");
@@ -1213,16 +1295,16 @@ do { # Until we get a legal key
       return;
     }
   } # while $msgstat{currmsg} <= $highkey
- 
+
   delwin($currentscreen);
   $msgstat{mode}=$lastmode;
 } # end ReadMessage
- 
- 
+
+
 sub PostMessage {
 # Creates a new message
-  my($pid,$filename,$user,$date,$subject,$msgname,$oldmode,$msgdir2);
-  my($numlines,$headerlen,$c,$umask);
+  my($pid,$filename,$date,$subject,$msgname,$oldmode,$msgdir2);
+  my($numlines,$headerlen,$c,$umask,$email,@text);
   local($currentscreen);
 
 &DEBUG("In PostMessage\n");
@@ -1233,9 +1315,21 @@ sub PostMessage {
   $pid=$$;
   $filename="/$ENV{'HOME'}/newmsgs.$pid";   # Temporary filename for editing
 &DEBUG("Temp filename is $filename\n");
-  $user=$ENV{'USER'};
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";  # vi is cooler anyway
+  if ($ENV{'EMAIL'}) {
+    $email = $ENV{'EMAIL'};
+  } elsif ($ENV{'USER'} && $ENV{'HOSTNAME'}) {
+    $email = $ENV{'USER'} . "@" . $ENV{'HOSTNAME'};
+  } elsif ($ENV{'USER'} && $ENV{'HOST'}) {
+    $email = $ENV{'USER'} . "@" . $ENV{'HOST'};
+  } elsif ($ENV{'USER'}) {
+    chomp($email = `hostname`);
+    ($email)=gethostbyname($email);
+    $email = $ENV{'USER'} . "@" . $email;
+  } else {
+    $email = "unknown\@somewhere";
+  }
 
   $currentscreen=newwin(5,50,int($LINES/2)-3,int($COLS/2)-25);
   addstr($currentscreen,0,int($COLS/2)-5,"New Message");
@@ -1266,19 +1360,20 @@ sub PostMessage {
       return;
     }
   }
-  
+
   # Create the header for the message
   open(FILE,">$filename");
-  print FILE "From $user $date\n";
+  print FILE "From $AUTHOR \($email\) $date\n";
   print FILE "Subject: $subject\n";
   print FILE "X-msgs-client: vmsgs $VERSION\n";
+  print FILE "Msgs-Posting-Host: ",$ENV{'HOST'},"\n" if (!$LOCAL);
   print FILE "\n\n";
   close(FILE);
   &AppendSig($filename);
 
   echo();
   alarm(0);  # Turn off the auto refresh
-  system("$editor +5 $filename");  # Edit the file
+  system("$editor +6 $filename");  # Edit the file
   alarm(60);
   noecho();
 
@@ -1295,39 +1390,32 @@ sub PostMessage {
 &DEBUG("refresh 1226\n");
   refresh($currentscreen);
 
-  do {
+    do {
     $c=getch();
   } until ($c =~ m/[sf]/i);
 
   if ($c =~ m/s/i) {
-    $msgname=&IncBoundsFile();
-    $msgdir2=&GetMsgDir2($msgname);
-&DEBUG("Getting ready to move $filename to $msgdir/$msgdir2/$msgname\n");
+    open(FILE,"$filename");
+    @text=<FILE>;
+    close(FILE);
 
-    if ( ! -d "$msgdir/$msgdir2") {
-&DEBUG("making a new msgs storage directory $msgdir/$msgdir2\n");
-      $umask=umask();
-      umask(0);
-      mkdir("$msgdir/$msgdir2",03777);
-      umask($umask);
-    }
-
-    system("mv $filename $msgdir/$msgdir2/$msgname");
-  } else {
-    unlink($filename);
+    &Post(join("",@text));
   }
+
+  unlink($filename);
+
   delwin($currentscreen);
 
   $msgstat{mode}=$oldmode;
- 
+
 } # end PostMessage
- 
+
 sub Followup {
 # Posts a followup to the message given as the first arg
 my ($msgnum)=@_;
 
-  my($pid,$filename,$user,$date,$subject,$c,$msgname,$from,$oldmode);
-  my($umask,$msgdir2);
+  my($pid,$filename,$date,$subject,$c,$msgname,$from,$oldmode);
+  my($umask,$msgdir2,@text,$msgref);
   local($currentscreen);
 
 &DEBUG("In Followup\n");
@@ -1338,9 +1426,21 @@ my ($msgnum)=@_;
   $pid=$$;
   $filename="$ENV{'HOME'}/newmsgs.$pid";
 &DEBUG("Temp filename is $filename\n");
-  $user=$ENV{'USER'};
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";
+  if ($ENV{'EMAIL'}) {
+    $email = $ENV{'EMAIL'};
+  } elsif ($ENV{'USER'} && $ENV{'HOSTNAME'}) {
+    $email = $ENV{'USER'} . "@" . $ENV{'HOSTNAME'};
+  } elsif ($ENV{'USER'} && $ENV{'HOST'}) {
+    $email = $ENV{'USER'} . "@" . $ENV{'HOST'};
+  } elsif ($ENV{'USER'}) {
+    chomp($email = `hostname`);
+    ($email)=gethostbyname($email);
+    $email = $ENV{'USER'} . "@" . $email;
+  } else { 
+    $email = "unknown\@somewhere";
+  }
 
   $subject=$master_msg_hash{$msgnum}->{subject};
   if ($subject =~ m/^Re\:(.*)/) {
@@ -1351,29 +1451,33 @@ my ($msgnum)=@_;
     $subject = "Re: $subject";
   }
 
-  $msgdir2=&GetMsgDir2($msgnum);
-  open(MSG,"$msgdir/$msgdir2/$msgnum") || open(MSG,"$msgdir/$msgnum");
-&DEBUG("Followup: skipping headers for message $msgnum\n");
-  while(($_ = <MSG>) && (! m/^\s+$/)) {;} # Skip headers
-
-&DEBUG("Followup: Creating the followup message\n");
+  if (!$master_msg_hash->{$msgnum}->{text}) {
+    @text=&GetBody($msgnum);
+    $msgref=\@text;
+  } else {
+    $msgref=$master_msg_hash->{$msgnum}->{text};
+  }
+ 
+  &DEBUG("Followup: Creating the followup message\n");
   open(FILE,">$filename");
-  print FILE "From $user $date\n";
+  print FILE "From $AUTHOR \($email\) $date\n";
   print FILE "Subject: $subject\n";
   print FILE "Followup-to: $msgnum\n";
   print FILE "X-msgs-client: vmsgs $VERSION\n";
+  print FILE "Msgs-Posting-Host: ",$ENV{'HOST'},"\n" if (!$LOCAL);
+
   print FILE "\n";
   print FILE $master_msg_hash{$msgnum}->{from} . " wrote:\n";
 
-  $numlines=5;
-  while (<MSG>) {
+  $numlines=6;
+  while ($_ = shift(@text)) {
     print FILE "\> $_";
     $numlines++;
   }
   $numlines += 2;  # Just 'cause
   print FILE "\n";
-  close(MSG);
   close(FILE);
+
   &AppendSig($filename);
 
   echo();
@@ -1405,23 +1509,14 @@ my ($msgnum)=@_;
 &DEBUG("Followup: getch got $c\n");
 
   if ($c =~ m/s/i) {
-    $msgname=&IncBoundsFile();
-    $msgdir2=&GetMsgDir2($msgname);
-&DEBUG("Getting ready to move $filename to $msgdir/$msgdir2/$msgname\n");
+    open(FILE,"$filename");
+    @text=<FILE>;
+    close(FILE);
 
-    if (! -d "$msgdir/$msgdir2") {
-&DEBUG("Creating a new msgs storage directory $msgdir/$msgdir2\n");
-      $umask=umask();
-      umask(0);
-      mkdir("$msgdir/$msgdir2",03777);
-      umask($umask);
-    }
-
-    system("mv $filename $msgdir/$msgdir2/$msgname");
-    unlink("$filename");
-  } else {
-    unlink("$filename");
+    &Post(join("",@{$msgref}));
   }
+  unlink($filename);
+
   clear($currentscreen);
 &DEBUG("refresh 1326\n");
   refresh($currentscreen);
@@ -1435,8 +1530,8 @@ my ($msgnum)=@_;
 sub MailReply {  # Mails a reply to the current message
 my ($msgnum)=@_;
 
-  my($pid,$filename,$user,$date,$subject,$c,$msgname,$from,$oldmode);
-  my($umask,$msgdir2,$return);
+  my($pid,$filenamer,$date,$subject,$c,$msgname,$from,$oldmode);
+  my($umask,$msgdir2,$return,@text,$msgref);
   local($currentscreen);
 
 &DEBUG("In MailReply($msgnum)\n");
@@ -1447,7 +1542,6 @@ my ($msgnum)=@_;
   $pid=$$;
   $filename="$ENV{'HOME'}/newmsgs.$pid";
 &DEBUG("Temp filename is $filename\n");
-  $user=$ENV{'USER'};
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";
 
@@ -1460,16 +1554,17 @@ my ($msgnum)=@_;
     $subject = "Re: $subject";
   }
 
-  $msgdir2=&GetMsgDir2($msgnum);
-  open(MSG,"$msgdir/$msgdir2/$msgnum") || open(MSG,"$msgdir/$msgnum");
-&DEBUG("MailReply: skipping headers for message $msgnum\n");
-  while(($_ = <MSG>) && (! m/^\s+$/)) {;} # Skip headers
+  if (! $master_msg_hash->{$msgnum}->{text}) {
+    @text=&GetBody($msgnum);
+    $msgref=\@text;
+  } else {
+    $msgref=$master_msg_hash->{$msgnum}->{text};
+  }
 
-&DEBUG("MailReply: Creating the followup message\n");
   open(FILE,">$filename");
   print FILE "you wrote in msgs:\n";
 
-  while (<MSG>) {
+  while ($_ = shift(@{$msgref})) {
     print FILE "\> $_";
     $numlines++;
   }
@@ -1507,9 +1602,15 @@ my ($msgnum)=@_;
   } until ($c =~ m/[sf]/i);
 &DEBUG("MailReply: getch got $c\n");
 
+  if ($master_msg_hash{$msgnum}->{email}) {
+    $from = $master_msg_hash{$msgnum}->{email};
+  } else {
+    $from = $master_msg_hash{$msgnum}->{from};
+  }
+
   if ($c =~ m/s/i) {
 &DEBUG("Getting ready to mail the reply\n");
-    $return=system("elm -s \"$subject\" $master_msg_hash{$msgnum}->{from} < $filename");
+    $return=system("elm -s \"$subject\" $from < $filename");
     $return /= 256;
     unlink("$filename");
 &DEBUG("Back from elm.  Got return code $return\n");
@@ -1524,17 +1625,16 @@ my ($msgnum)=@_;
   $msgstat{mode}=$oldmode;
 
   &DEBUG("leaving MailReply\n");
-}
- 
-sub IncBoundsFile {
+} # end MailReply
+
+sub FOO_IncBoundsFile {
 # Increments the upper number in the bounds file. Returns the incremented
 # number
+# Shouldn't be needed any more since we're using msgs.pl now
 
   local($LOCK_EX,$LOCK_SH,$LOCK_UN,$first,$last,$i);
 
 &DEBUG("In IncBoundsFile\n");
-
-  $LOCK_SH=1; $LOCK_EX=2; $LOCK_UN=8;
 
   if (!open(BOUNDS,"+<$msgdir/.bounds")) {
     for ($i=0; $i==9; $i++) {
@@ -1573,17 +1673,17 @@ sub IncBoundsFile {
 
 sub aaaaggghhhh {
 # Saves the .msgsrc file before dying
- 
-  &WriteMsgsrc($msgstat{maxmsg}+1);
- 
+
+  &SetRC($msgstat{maxmsg}+1);
+
   if ($curses_on) {
     &DoneCursesWindows(%screen);
   }
   print "\n";
   exit(1);
 }
- 
- 
+
+
 sub sigcont {
 # Puts the terminal back into cool mode. Hopefully your shell takes care of
 # putting it into normal mode when you hit ^Z
@@ -1593,11 +1693,12 @@ sub sigcont {
     alarm(60);
   }
 }
- 
+
 sub sigalrm {
 # Called every 60 seconds. Rereads the .bounds file to get message updates
-my($x,$y)
- 
+my($msg,$oldlastmsg,$numlines,$from,$date,$email,$subject,$followup,$uid,$text);
+my($header);
+
 &DEBUG("In sigalrm\n");
   if ($msgstat{lastmsg} != &NumMessages()) {
 &DEBUG("\$msgstat{lastmsg} is $msgstat{lastmsg} \&NumMessages is ".&NumMessages() . "\n");
@@ -1609,14 +1710,18 @@ my($x,$y)
     $oldlastmsg=$msgstat{lastmsg};
     $msgstat{lastmsg}=&NumMessages();
     foreach $msg ( ($oldlastmsg+1) .. $msgstat{lastmsg} ) {
-      $msgdir2=&GetMsgDir2($msg);
-      open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg") || next;
-      $numlines=0;
-      while((!eof(MSG)) && (($_ = <MSG>) ne "\n")) { # Read all headers
-        chop;
-        if (m/^from (\w+) (.*)$/i) {
+      my(@header) = &GetHeader($msg);
+      $header=\@header;
+      foreach (@header) {
+        chomp;
+        if (m/^from (\w+) \((\S+)\) (.*)$/i) {
+          $from=$1;
+          $email=$2;
+          $date=$3;
+        } elsif (m/^from (\w+) (.*)$/i) {
           $from=$1;
           $date=$2;
+          $email="";
         } elsif (m/^subject\: (.*)/i) {
           $subject=$1;
         } elsif (m/^followup\-to\: (\d*)/i) {
@@ -1627,28 +1732,44 @@ my($x,$y)
           $numlines=$1;
         }
       }
-      $uid=(stat("$msgdir/$msg"))[4];
+      $uid= $LOCAL ? (stat("$msgdir/$msg"))[4] : -1;
 
-      # Now find out how many lines are in this message
-      if ($numlines==0) {
-        while (<MSG>) {
-          $numlines++;
+      {
+        my(@text)=&GetBody($msg);
+
+        # Now find out how many lines are in this message
+        if ($numlines == 0) {
+          $numlines = scalar(@text);
         }
+        $text=\@text;
       }
-      close(MSG);
 
       if (! ShouldKillfile($msg,$from,$subject,$uid)) {
-&DEBUG("Adding message $msg to the hash");
         $master_msg_hash{$msg}->{from}=$from;
         $master_msg_hash{$msg}->{date}=$date;
         $master_msg_hash{$msg}->{uid}=$uid;
         $master_msg_hash{$msg}->{subject}=$subject;
         $master_msg_hash{$msg}->{numlines}=$numlines;
         $master_msg_hash{$msg}->{followup}=$followup;
+        $master_msg_hash{$msg}->{email}=$email;
+       
+        # If remote, we've already sucked up the message
+        if ((!$LOCAL || $opt_c) && !$opt_n) {
+&DEBUG("Caching the message\n");
+          $master_msg_hash{$msg}->{text}=$text;
+          $master_msg_hash{$msg}->{header}=$header;
+        } else {
+&DEBUG("Not Caching the message\n");
+          # If local, we'll suck it later, to save memory
+          $master_msg_hash{$msg}->{text}=0;
+          $master_msg_hash{$msg}->{header}=0;
+        }
+
+        push(@{$messages{$followup}->{follows}},$msg);
       } else {
-&DEBUG("Skipping message $msg 'cause it's killfiled");
+        &DEBUG("Skipping message $msg 'cause it's killfiled\n");
       }
-      
+
     }
 
 #    clear($window);
@@ -1666,22 +1787,22 @@ my($x,$y)
 
 &DEBUG("leaving sigalrm\n");
   alarm(60);
-}
- 
- 
+}  # end sigalrm
+
 sub DEBUG {
 # prints debugging messages or not
   if ($DEBUG) {
     print DEBUG "@_";
   }
 }
- 
+
 
 sub DoHelp {
 local($mode)=@_;
 local($window,$c);
 
   $window=newwin($LINES-2,0,1,0);
+  clear($window);
   addstr($window,"Help for mode $mode\n\n");
 
   if (($mode eq "selection") || ($mode eq "SearchSelect")) {
@@ -1715,7 +1836,7 @@ H      - Print the headers for this message
 S or I - Go back to the message selection screen
 N      - Go to the next message
 P      - Go to the previous message
- 
+
 Hit any key to continue
 ");
     refresh($window);
@@ -1739,7 +1860,7 @@ sub GetCommandLine {
     }
   }
 }  # end GetCommandLine
-  
+
 
 sub AppendSig {
 # Puts the contents of your .msgssig file to the end of a message
@@ -1764,9 +1885,37 @@ my($filename)=@_;
 }  # end AppendSig
 
 
-sub GetMsgDir2 {
+sub FOO_GetMsgDir2 {
 # Returns the name of the extended msgs directory where the msg is
+# Shouldn't need this any more since we're using msgs.pl now
+
 my($msg)=@_;
 
   return ( ($msg =~ m/(.+)...$/)[0] . "000.dir");
 }
+
+
+sub DoCommandLineHelp {
+  print "Command Line Options for vmsgs:
+-all  Read in all msgs (default is only the last 100)
+-k    Ignore your kill file
+-r    Read remotely
+-c    Force caching of msgs (Default if in remote mode)
+-n    Don't cache msgs (Default if in local mode)
+";
+
+exit(0);
+}
+
+
+sub GetLucienLogin {
+  if (!open(FILE,"${ENV{'HOME'}}/.msgslogin")) {
+    return $ENV{'USER'};
+  }
+
+  $_=<FILE>;
+  close(FILE);
+  m/^(\w+)/;
+  $1;
+}
+
