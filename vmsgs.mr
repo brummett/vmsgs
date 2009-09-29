@@ -115,3 +115,51 @@ get back to vmsgs code, too.  See also MR 13 9/28/05
 
 MR 26 - ceaste - dies when you try to being up the help window in a terminal
 shorter than 28 chars tall.  11/16/05
+FIX PromptWindow (which the help window is built from) now inherits from
+ScrollableWindow to implement scrolling.  The Read widget now uses the
+scrolling methods from ScrollableWindow, too 11/18/05
+
+MR 27 - tony - When a PromptWindow has an odd number for height, the
+bar with all the choices is placed too low and it covers up the bottom row
+with the box border 11/18/05
+
+MR 28 - cakelady - The cursor appears in the read window at the top left 
+corner and you can't read the character underneath it 11/22/05
+FIXish  the man page for curs_set() implies that some terminals aren't able
+to hide the cursor, and the apple terminal.app can't  11/22/05
+FIX  Changed the order of drawing the scrolly arrows on the right side.  
+Now we draw the top arrow first, then the bottom, leaving the cursor at 
+the bottom and out the of way when we're done.  11/22/05
+
+MR 29 - tony - A PromptWindow with centered text always displayed the text
+too far to the right.  11/22/05
+FIX The ScrollableWindow::Draw() routine was cut-and-pasted incorrectly,
+and was getting the length of the $_ string instead of the correct $string
+11/22/05
+
+MR 30 - wolfhead - If a .msgsrules file of any kind exists at all, it skips
+all msgs 3/1/06
+FIX MsgsRules::pass() would return false if the rule matched or it wasn't
+a search-type rule.  It should immediately return false if the rule failed
+and it is a search-type rule.  If it failed and it's a normal rule, then
+just go to the next one. 3/1/06
+
+MR 31 - tony - In the reading widget, the arrows (or lack of them) draw over
+the text which can cut off the last letter of long lines at the top and
+bottom of the window.  3/23/06
+FIX Changed the order of redraws so that it draws the arrows (or spaces) and
+then draws the window's contents, so that the text will overwrite the arrows
+3/23/06
+
+MR 32 - nemesis - When doing a search, you should be able to put in a regex
+in the format /blah/i 3/29/06
+FIX It already accepted regexes of the format of (?i)blah, but now
+MsgsRules::pass() will see if the pattern looks like a regex with modifiers
+(/blah/i) and rewrite it to the other format before compiling the regex.
+3/29/06
+
+MR 33 - nemesis - When inside search results, don't update the maxread id
+3/29/06
+FIX - CursesInterface::MainLoop() saves the maxread id before running the
+selection widget with the search results, then restores it after 3/29/06
+

@@ -36,7 +36,7 @@
 
 use Getopt::Std;
 
-use lib "/home/tony/vmsgs3";
+use lib "/home/tony/vmsgs-3.2";
 use lib "/usr/local/lib";  # for msgs.pl
 #use ExtUtils::testlib;
 use Vmsgs;

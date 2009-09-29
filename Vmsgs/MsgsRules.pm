@@ -169,6 +169,9 @@ print STDERR scalar(@{$self->{'list'}})," rules\n" if ($DEBUG);
 
     my $regex;
     if ($pattern && !$node->{'regex'}) {
+      if ($pattern =~ m#^/(.*?)/(\w+)$#) {
+          $pattern = "(?$2)$1";
+      }
       $node->{'regex'} = eval { qr/$pattern/};
       if (!$node->{'regex'}) {
         printf STDERR "Can't compile rule into pattern, action %s area %s pattern %s\n",$node->{'action'},$node->{'area'},$node->{'pattern'};
@@ -178,16 +181,18 @@ print STDERR scalar(@{$self->{'list'}})," rules\n" if ($DEBUG);
     }
     $regex = $node->{'regex'};
   
+    my $string;
     if ($node->{'area'} eq "from") {
       print STDERR "looking for Author match $regex\n" if ($DEBUG);
-      $flag = ($msg->header("Author") =~ m/$regex/);
+      print STDERR "msg author is ",$msg->header("Author"),"\n" if ($DEBUG);
+      $flag = (($msg->header("Author")) =~ $regex);
     } elsif ($node->{'area'} eq "subject") {
       print STDERR "looking for subject match $regex\n" if ($DEBUG);
       print STDERR "against subject >>",$msg->header("Subject:"),"<<\n" if ($DEBUG);
-      $flag = ($msg->header("Subject:") =~ m/$regex/);
+      $flag = ($msg->header("Subject:") =~ $regex);
     } elsif ($node->{'area'} eq "body") {
       print STDERR "looking for body match pattern $regex\n" if ($DEBUG);
-      $flag = ($msg->body() =~ m/$regex/);
+      $flag = ($msg->body() =~ $regex);
     } elsif ($node->{'area'} eq "remaining") {
       print STDERR "area was remaining, matching\n" if ($DEBUG);
       $flag = 1;
@@ -196,11 +201,14 @@ print STDERR scalar(@{$self->{'list'}})," rules\n" if ($DEBUG);
     # If this is a search-type rule, then a msg must pass _all_
     # the tests to pass.  For a normal-type rule, then it just has to
     # pass any one of the rules
-    if ($self->{'is_search'} && ! $flag) {
-      print STDERR "flag was false and we're a search-type rule, fail!\n" if ($DEBUG);
-      return 0;
+    unless ($flag) {
+      if ($self->{'is_search'}) {
+        return 0;
+      } else {
+        next;
+      }
     }
-
+     
     print STDERR "flag was 1\n" if ($DEBUG);
 
     if ($node->{'action'} =~ m/read/i) {

@@ -98,6 +98,25 @@ my($self,$arg) = @_;
   }
 }
 
+sub width {
+my($self,$arg) = @_;
+  if (defined($arg)) {
+    $self->{'width'} = $arg;
+  } else {
+    $self->{'width'} || Curses::getmaxx();
+  }
+}
+
+sub height {
+my($self,$arg) = @_;
+  if (defined($arg)) {
+    $self->{'height'} = $arg;
+  } else {
+    $self->{'height'} || Curses::getmaxy();
+  }
+}
+
+
 
 # Return a 5-char-max wide output of the current time
 sub _PrintTime {

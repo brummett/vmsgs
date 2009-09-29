@@ -181,6 +181,7 @@ my($self,%args) = @_;
         $self->NoSearchMatches();
       } else {
         $self->{'search_level'}++;
+        my $saved_maxread = $msgsinterface->maxread;
 print STDERR "Before setting currentid of new msgslist\n" if ($DEBUG);
         $newlist->setcurrentid($msgslist->currentid);
         my $newtopwindow = Vmsgs::CursesInterface::Select->new(msgsinterface => $msgsinterface,
@@ -189,6 +190,7 @@ print STDERR "Before setting currentid of new msgslist\n" if ($DEBUG);
 print STDERR "Created new select widget\n" if ($DEBUG);
         ($command,$msgid) = $self->MainLoop(msgslist => $newlist,
                                             topwindow => $newtopwindow);
+        $msgsinterface->maxread($saved_maxread);
         $self->{'search_level'}--;
 print STDERR "Back from MainLoop\n" if ($DEBUG);
       }
@@ -293,9 +295,10 @@ my($msgsinterface) = @_;
 
   if (scalar($msgsinterface->marks())) {
     $win = new Vmsgs::CursesInterface::PromptWindow(height => 6,
-                                                    width => 26,
+                                                    width => 30,
                                                     title => "Marks",
                                                     message => "Read marked messages?",
+                                                    noscroll => 1,
                                                     choices => [["Yes", "Y"],["No","N"]]);
     $char = $win->input();
     if ($char eq "Y" or $char eq "y") {

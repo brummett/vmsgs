@@ -82,6 +82,7 @@ my($self) = @_;
                                                     height => 6,
                                                     title => "Confirm",
                                                     message => "Post this reply?",
+                                                    noscroll => 1,
                                     choices => [["Send", "S"],["Edit it","E"],["Forget it", "F"],["Dump to /dev/null", "D"]]);
     $char = $ask->input();
     $self->Debug("Read a >>$char<<");

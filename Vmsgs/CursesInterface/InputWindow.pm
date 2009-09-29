@@ -88,6 +88,7 @@ my($self) = @_;
   $self->window->move($self->currentline(),1);
   $self->window->clrtobot();
   $self->window->box("|","-");
+  $self->boxed(1);
   if ($self->{'title'}) {
     $self->{'title'} = " " . $self->{'title'} . " ";
     $self->window->addstr(0, int(length($self->{'title'})/2), $self->{'title'});

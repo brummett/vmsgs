@@ -1,5 +1,27 @@
 # Revision History
 
+# V 3.2.4 When entering a search term, accept things that look
+#         like regexes with modifiers (like /Blah/i).  Save the
+#         maxread id before running the selection widget with
+#         search results, and restore that id after 3/29/06
+# V 3.2.3 Partially fixed the handling of the up and down scroll
+#         arrows for ScrollableWindow-s.  It's still not exactly
+#         right, but it at least won't cur off the last character
+#         in the read window with long lines like URLs  3/23/06
+# V 3.2.2 Fixed a bug with rules file handling.  If a .msgsrules file 
+#         existed at all, it would skip all msgs.  3/1/06
+# V 3.2.1 PromptWindows with centered text should work properly now; it was
+#         probably a cut-and-paste problem, but when figuring the starting
+#         column, it was getting the length of $_ instead of $string in
+#         ScrollableWindow->Draw().  Also, some terminals aren't capable
+#         of hiding the cursor, and the new Drawing routine was putting
+#         the cursor in an annoying position near the top of the Read widget.
+#         I rearranged the order that things are drawn so the cursor ends up
+#         at the bottom of the screen.  11/22/05
+# V 3.2.0 Created a new class ScrollableWindow which
+#         CursesInterface::PromptWindow and CI::Read inherit from.  
+#         ScrollableWindow implements stuff like Draw() PageUp/Down and
+#         LineUp/Down().   11/18/05
 # V 3.1.2 After posting a new msg or a followup, there's a new option "E"
 #         to re-edit your msg before posting.  Added "P" keypress on
 #         the selection screen to jump to the parent, just like the

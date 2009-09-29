@@ -2,10 +2,11 @@ package Vmsgs::CursesInterface::Read;
 
 use Curses;
 use Vmsgs::WidgetBase;
+use Vmsgs::CursesInterface::ScrollableWindow;
 use Vmsgs::Debug;
 use strict;
 
-our @ISA = qw (Vmsgs::WidgetBase Vmsgs::Debug);
+our @ISA = qw (Vmsgs::CursesInterface::ScrollableWindow Vmsgs::WidgetBase Vmsgs::Debug);
 
 our $DEBUG = 0;
 
@@ -13,22 +14,21 @@ our $DEBUG = 0;
 
 # Create a new Read widget
 sub new {
-my($class,%args) = @_;
-  my($self,$win);
-
-  $self = {};
-  bless $self,$class;
+my $class = shift;
+  
+  my $self = $class->SUPER::new(@_);
 
   $self->start_debug(".vmsgs.debug");
   $self->Debug("Creating new Read widget $self");
 
   # Initialize the internal state
+  my %args = @_;
   $self->msgsinterface($args{'msgsinterface'});
   $self->msgslist($args{'msgslist'});
   $self->state("read");
 
   # Create the titlebar
-  $win = new Curses(1,0,0,0);
+  my $win = new Curses(1,0,0,0);
   if (!$win) {
     $self->Debug("Can't create titlebar: $!");
     return undef;
@@ -57,11 +57,14 @@ my($class,%args) = @_;
     $self->Debug("Can't create main select window: $!");
     return undef;
   }
+  $self->width(getmaxx());
+  $self->height(getmaxy()-2);
   $win->scrollok(0);
   $self->window($win);
   $self->panel($win->new_panel());
   $self->currentline(0);
 
+  $self->reset();
   $self->Draw();
   
   $self;
@@ -76,7 +79,10 @@ my($self) = @_;
   $self->Debug("resetting read widget");
 
   $self->currentline(0);
-  $self->{'bodycache'} = undef;
+  $self->msgsinterface->setread($self->msgslist->currentid());
+  my $msg = $self->msgslist->get();
+  my $string = $self->{'showheaders'} ? $msg->Textify() : $msg->body();
+  $self->StoreLines($string);
 } # end reset
 
 
@@ -89,42 +95,45 @@ my($self) = @_;
 
   $self->msgsinterface->SetArg0Status("reading " . $self->msgslist->currentid());
 
-  $self->Debug("Drawing read window $self from scratch");
+  return $self->SUPER::Draw();
 
-  $self->window->clear();
-  $self->window->move(0,0);
-
-  $strings = $self->CacheStrings();
-
-  $currentline = $self->currentline();
-  $screenline = 1;
-  $msg = $self->msgslist->get();
-
-  $self->Debug(sprintf("Ready to draw the msg currentline $currentline %d total lines",scalar(@$strings)));
-
-  while($screenline <= $self->window->getmaxy()) {
-    # last if ($currentline > $msg->header("Content-length:"));
-    last if ($currentline > scalar(@$strings));
-
-    $self->Debug("Drawing line of a msg screenline $screenline currentline $currentline");
-
-    $self->window->addstr($strings->[$currentline]);
-    # Make sure there's a newline at the end
-    $self->window->addstr("\n") unless ($strings->[$currentline] =~ m/\n$/);  
-
-    # This handles the case where the line was wider than the terminal
-    # width, so should count as 2 (or more) lines
-    $screenline += (int(length($strings->[$currentline]) / $self->window->getmaxx) + 1);
-    $currentline++;
-  } # end while
-
-  # decrement it because during the last trip through the above
-  # while() loop, it really shouldn't have incremented it
-  # maybe that while() above should be a for() instead...
-  $currentline--;
-
-  $self->Debug("Done drawing, currentline is $currentline");
-  $self->currentline($currentline);
+#  $self->Debug("Drawing read window $self from scratch");
+#
+#  $self->window->clear();
+#  $self->window->move(0,0);
+#
+#  $strings = $self->Lines();
+#
+#  $currentline = $self->currentline();
+#  $screenline = 1;
+#  $msg = $self->msgslist->get();
+#
+#  $self->Debug(sprintf("Ready to draw the msg currentline $currentline %d total lines",scalar(@$strings)));
+#
+#  while($screenline <= $self->window->getmaxy()) {
+#    # last if ($currentline > $msg->header("Content-length:"));
+#    last if ($currentline > scalar(@$strings));
+#
+#    $self->Debug("Drawing line of a msg screenline $screenline currentline $currentline");
+#
+#    $self->window->addstr($strings->[$currentline]);
+#    # Make sure there's a newline at the end
+#    $self->window->addstr("\n") unless ($strings->[$currentline] =~ m/\n$/);  
+#
+#    # This handles the case where the line was wider than the terminal
+#    # width, so should count as 2 (or more) lines
+#    $screenline += (int(length($strings->[$currentline]) / $self->window->getmaxx) + 1);
+#    $currentline++;
+#  } # end while
+#
+#  # decrement it because during the last trip through the above
+#  # while() loop, it really shouldn't have incremented it
+#  # maybe that while() above should be a for() instead...
+#  $currentline--;
+#
+#  $self->Debug("Done drawing, currentline is $currentline");
+#  $self->ShowScrollbars();
+#  $self->currentline($currentline);
 } # end Draw
 
 
@@ -156,65 +165,37 @@ my($self,$direction) = @_;
 # Called when the user presses J, ENTER or KEY_DOWN to show one more line of the msg
 sub LineDown {
 my($self,$ok_to_next) = @_;
-  my($currentline,$strings);
 
-  $self->Debug("In LineDown");
-
-  $strings = $self->CacheStrings();
+#  my $strings = $self->Lines();
     
-  $currentline = $self->currentline();
-  $currentline++;
-print STDERR "Down currentline $currentline\n" if ($DEBUG);
-$self->Debug(sprintf("currentline $currentline total lines %d",scalar(@$strings)));
+  return 1 if $self->SUPER::LineDown();
 
-#  if (($currentline + $self->window()->getmaxy() - 2)>= scalar(@$strings)) {   # We've already shown the whole thing
-  if ($currentline > scalar(@$strings)) {   # We've already shown the whole thing
-print STDERR "Down in if block\n" if ($DEBUG);
-    return 1 unless $ok_to_next;  # if downarrow, don't skip to the next
-    $currentline = 0;
-    my $retval = $self->NextMsg(1);
-print STDERR "retval was $retval\n" if ($DEBUG);
-    #return undef if (!$retval);
-    $self->Draw();
-    return $retval;
+  return 1 unless ($ok_to_next);  
+  if ($self->NextMsg(1)) {
+    $self->Draw;
+    return 1;
+  } else {
+    return undef;
   }
-
-  $self->window->scrollok(1);
-  $self->window->scrl(1);
-  $self->window->scrollok(0);
-
-  $self->window->move($self->window->getmaxy(),0);
-  $self->window->addstr("\r" . $strings->[$currentline]);
-
-print STDERR "Down storing currentline $currentline\n" if ($DEBUG);
-  $self->currentline($currentline);
+  
 } # end LineDown
 
 
 # Called when the user presses SPACE or KEY_NPAGE
 sub PageDown {
 my($self) = @_;
-  my($currentline,$strings);
- 
-  $self->Debug("In PageDown");
 
-  $currentline = $self->currentline();
-
-  $strings = $self->CacheStrings();
-
-  $self->Debug(sprintf("PageDown currentline $currentline total lines %d",
-                       scalar(@$strings)));
-
-  if ($currentline >= scalar(@$strings)) {  # We're at the end of this msg, goto the next one
-    return undef if (! $self->NextMsg(1));
-
+  if ($self->SUPER::PageDown()) {
+    return 1;
   } else {
-    #$currentline = $currentline + $self->window->getmaxy - 2;  # Leave 2 old lines at the top of the new window
-    $currentline -= 2;  # Leave 2 old lines at the top of the new window
-    $self->currentline($currentline);
+    if ($self->NextMsg(1)) {
+      $self->Draw();
+      return 1;
+    } else {
+      return undef;
+    }
   }
 
-  $self->Draw();
 } # end PageDown
 
 
@@ -222,67 +203,33 @@ my($self) = @_;
 sub LineUp {
 my($self,$ok_to_next) = @_;
  
-  $self->Debug("In LineUp");
+  return 1 if $self->SUPER::LineUp();
 
-  my $strings = $self->CacheStrings();
- 
-  #$currentline = $self->currentline();
-  my $topline = $self->currentline() - $self->window->getmaxy();
-print STDERR "Topline $topline\n" if ($DEBUG);
-print STDERR "currentline ",$self->currentline,"\n" if ($DEBUG);
-  #if ($currentline <= $self->window->getmaxy()) {  # We're already at the end
-  if ($topline < 0) {  # We're already at the top
-print STDERR "In If block\n" if ($DEBUG);
-    return 1 unless $ok_to_next;
-    my $retval = $self->NextMsg(-1);
-print STDERR "retval $retval\n" if ($DEBUG);
+  return 1 unless ($ok_to_next);
+  if ($self->NextMsg(-1)) {
     $self->Draw();
-    return $retval;
+    return 1;
+  } else {
+    return undef;
   }
- 
-  $self->window->move($self->window->getmaxy(),0);
-  $self->window->scrollok(1);
-  $self->window->scrl(-1);
-  $self->window->scrollok(0);
- 
-  $self->window->move(0,0);
-  #$self->window->addstr($strings->[$topline - $self->window->getmaxy()]);
-  $self->window->addstr($strings->[$topline]);
-  $self->window->move($self->window->getmaxy(),0);
- 
-  $self->currentline($self->currentline - 1);
+
 } # end LineUp
 
 
 # Called when the user presses KEY_BACKSPACE or KEY_PPAGE
 sub PageUp {
 my($self) = @_;
-  my($currentline,$strings);
- 
-  $self->Debug("In PageUp");
-
-  $currentline = $self->currentline();
-
-  $strings = $self->CacheStrings();
-
-  $self->Debug(sprintf("PageUp currentline $currentline total lines %d",
-                       scalar(@$strings)));
-
-#  if ($currentline <= 0) {  # We're already at the beginning of the msg, go to the previous one
-#    if (! $self->msgslist->prev()) {  # If this was already the first one
-#      return undef;
-#    }
-#    $self->msgsinterface->currmsg($self->msgslist->currentid);
-#    $self->reset();
-  if ($currentline <= $self->window->getmaxy()) {  # We're already at the beginning of the msg, goto the previous one
-    return undef if (!$self->NextMsg(-1));
-  
+  if ($self->SUPER::PageUp()) {
+    return 1;
   } else {
-    $currentline = $currentline - ($self->window->getmaxy * 2) + 2;  # Leave 2 old lines at the bot of the new window
-    $self->currentline($currentline);
+    if ($self->NextMsg(-1)) {
+      $self->Draw();
+      return 1;
+    } else {
+      return 0;
+    }
   }
- 
-  $self->Draw();
+
 } # end PageUp
 
 sub DrawTitlebar {
@@ -359,29 +306,24 @@ my($self) = @_;
 } # end UpdateBottombar
 
 
-# Used to cache array-ified body of msgs so we don't have to split() the
-# body every time returns ref to the whole array
-sub CacheStrings {
-my($self) = @_;
-
-  if (! $self->{'bodycache'}) {
-    my($msg,$string,@strings);
- 
-    $self->msgsinterface->setread($self->msgslist->currentid());
-
-    $msg = $self->msgslist->get();
-    # $string = $msg->Justify($self->window->getmaxx());
-    $string = $self->{'showheaders'} ? $msg->Textify() : $msg->body();
-    @strings = split(/\n/,$string);    # Get all the lines of the msg into an array
-
-    $self->Debug(sprintf("Splitting up the msg body into array %d chars into %d lines",
-                         length($string), scalar(@strings)));
-
-    $self->{'bodycache'} = \@strings;
-  } # end if
-
-  $self->{'bodycache'};
-}
+## Used to cache array-ified body of msgs so we don't have to split() the
+## body every time returns ref to the whole array
+#sub CacheStrings {
+#my($self) = @_;
+#
+#  if ($self->LineCount()) {
+#    $self->Lines
+#    my($msg,$string);
+# 
+#    $self->msgsinterface->setread($self->msgslist->currentid());
+#
+#    $msg = $self->msgslist->get();
+#    $string = $self->{'showheaders'} ? $msg->Textify() : $msg->body();
+#    $self->Lines($string);
+#  } else {
+#
+#  $self->{'bodycache'};
+#}
 
 
 # Does the user input loop until something interesting is selected, or the timer runs out
@@ -410,6 +352,7 @@ my($self,%args) = @_;
 
     # Update the screen
     if (! $self->{'timeout'}) {
+#      $self->ShowScrollbars();
       $self->DrawTitlebar();
       $self->DrawBottombar();
       update_panels();

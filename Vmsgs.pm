@@ -1,4 +1,4 @@
 package Vmsgs;
-our $VERSION = "3.1.2";
+our $VERSION = "3.2.4";
 
 1;

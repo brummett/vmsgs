@@ -79,6 +79,7 @@ my($self) = @_;
                                                     height => 6,
                                                     title => "Confirm",
                                                     message => "Mail this message?",
+                                                    noscroll => 1,
                                     choices => [["Send", "S"],["Forget it", "F"],["Dump to /dev/null", "D"]]);
     $char = $ask->input();
   

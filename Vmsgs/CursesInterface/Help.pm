@@ -49,7 +49,8 @@ w              - Append the current message to a file
 ?              - Bring up this help screen
 h              - Toggle the showing of message headers
 q or i         - Exit this Read screen
-Q              - Quit vmsgs";
+Q              - Quit vmsgs
+";
 
 our $SearchHelp = "Help for the Search screen
 
@@ -66,7 +67,7 @@ my($class,%args) = @_;
     $width = 65;
     $string = $SelectHelp;
   } elsif ($args{'mode'} eq "read") {
-    $height = 23;
+    $height = 24;
     $width = 65;
     $string = $ReadHelp;
   } else {
