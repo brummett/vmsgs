@@ -3,6 +3,12 @@
 # vmsgs 2.0 - An improvement for a drop-in replacement for Case's cool
 # clone of msgs(1).
 
+# V 2.94 Added scrolling msg display instead of redraw (ReadMessage,
+#        GetCommandLine).  Added support for an rc file (.vmsgsrc) so you
+#        don't have to remember all the command line switches (GetCommandLine)
+#        Fixed getting the user and host names (main,PostMessage,Followup)
+#        .msgsrc should now be correct after an abort with ^C (aaaaggghhhh,
+#        InitMsgStat) 9/17/97
 # V 2.93 Enabled use of the arrow keys - added a call to keypad() (main)
 #        Created a wrapper for getch to handle reading from the child on
 #        async reads - should fix random segfaults and bus errors (sigIO,
@@ -93,12 +99,12 @@
 # Start of main script
 
 $DEBUG=1;
-print "Go!\n" if ($DEBUG);
 
 # Some initialization stuff
 $|=1;
 
 push(@INC,".");  # So we can find msgs.pl if it's in the local directory
+unshift(@INC,"/usr/local/encap/msgs-pack-1.0/lib");
 use Curses;
 use Socket;
 require "msgs.pl";
@@ -129,7 +135,7 @@ $newmessages=0;
 $LOCAL = ! $opt_r;  # Local and remote reading
 $OLDSCHOOL=0;  # For the msgs.pl library
 $0="vmsgs: new and improved";
-$VERSION="2.93 Beta";
+$VERSION="2.94 Beta";
 $CACHE_MSGS = ($opt_c || (! $LOCAL)) && (! $opt_n);
 &DEBUG("\$CACHE_MSGS is $CACHE_MSGS\n");
 $PID=$$;
@@ -154,7 +160,13 @@ if ($LOCAL) {
 
 &DEBUG("Starting up msgs API\n");
 &InitializeMsgsAPI();
-$AUTHOR= $LOCAL ? $ENV{'USER'} : &GetLogname();
+$AUTHOR= $LOCAL ? $ENV{'USER'} || $ENV{'LOGNAME'} :  &GetLogname();
+{
+  my($user,$host);
+  chomp($user=`whoami`);
+  chomp($host=`hostname`);
+  $EMAIL= $ENV{'EMAIL'} || "$user\@$host";
+}
 
 $msgstat=&InitMsgStat();
 &ReadKillfile();
@@ -209,14 +221,18 @@ sub InitMsgStat {
 # $msgstat{lastmsg} : The ID number of the last message
 # $msgstat{firstloaded} : The ID number of the first msg headers loaded
 # $msgstat{lastloaded} : The ID number of the last msg headers loaded
-  my(%msgstat);
+  my($tmp,%msgstat);
 
 &DEBUG("In InitMsgStat\n");
 
   if ($opt_m) {
     $msgstat{currmsg}=$opt_m;
   } else {
-    $msgstat{currmsg}=&ReadRC();
+    if (($tmp=&ReadRC())<=1) {
+      $msgstat{currmsg}=&NumMessages();
+    } else {
+      $msgstat{currmsg}=$tmp;
+    }
   }
 
   $msgstat{maxmsg}=$msgstat{currmsg} - 1;
@@ -562,12 +578,14 @@ my($msg)=@_;
 sub StartDebug {
 # opens the debug file for writing
   if ($DEBUG) {
-    open(DEBUG,">newmsgsdebug");
+    open(DEBUG,">/dev/null");
     select(DEBUG);
     $|=1;
     select(STDOUT);
 
     print DEBUG "vmsgs $VERSION\n";
+  } else {
+    open(DEBUG,">/dev/null");
   }
 } # end StartDebug
 
@@ -577,11 +595,8 @@ sub DEBUG {
   my($time);
   
   ($time) = (scalar(localtime()) =~ m/\w+ (\w+ \d+ \d+\:\d+\:\d+)/);
-
-  if ($DEBUG) {
-    print DEBUG "**" if ($PID != $$);
-    print DEBUG "$time [$$]: @_";
-  }
+  print DEBUG "**" if ($PID != $$);
+  print DEBUG "$time [$$]: @_";
 } # end DEBUG
 
 
@@ -1261,7 +1276,7 @@ sub ReadMessage {
 # valid messages is passed in as the first arg
 my($msghash)=@_;
 
-  my($numlines,$c,$msgsleft,$timestr,$lastmode,$msgdir2,$msgref,$msglen);
+  my($numlines,$c,$msgsleft,$timestr,$lastmode,$msgdir2,$msgref,$msglen,$first);
   my($from,$subject,$month,$date,$year,$percentdone,$legalkey,$showheader);
   local($titlebar,$bottombar,$currentscreen);
 
@@ -1325,7 +1340,21 @@ my($msghash)=@_;
       &DEBUG("In ReadMessage:SHOW_ONE_PAGE\n");
 
       # create the message window
-      clear($currentscreen);
+      if ($opt_scroll) {
+        scrollok($currentscreen,1);
+        idlok($currentscreen,1);
+        setscrreg($currentscreen,0,$LINES-2);
+        syncok($currentscreen,1);
+        addstr($currentscreen,"\n" . "-"x75 . "\n") if ($first++);
+        addstr($currentscreen,"From ".$msghash->{$msgstat->{currmsg}}->{from});
+        addstr($currentscreen,"\nSubject: ".
+                              $msghash->{$msgstat->{currmsg}}->{subject}.
+                              "\n\n");
+                              
+      } else {
+        clear($currentscreen);
+      }
+
       addstr($currentscreen,join(($showheader && ! $LOCAL) ? "\n" : "",
              @{$msgref}[$numlines .. ($numlines + $LINES - 3)]));
       $numlines += ($LINES-3);
@@ -1478,7 +1507,7 @@ my($msghash)=@_;
 sub PostMessage {
 # Creates a new message
   my($pid,$filename,$date,$subject,$msgname,$oldmode,$msgdir2);
-  my($numlines,$headerlen,$c,$umask,$email,@text);
+  my($numlines,$headerlen,$c,$umask,@text);
   local($currentscreen);
 
 &DEBUG("In PostMessage\n");
@@ -1491,19 +1520,6 @@ sub PostMessage {
 &DEBUG("Temp filename is $filename\n");
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";  # vi is cooler anyway
-  if ($ENV{'EMAIL'}) {
-    $email = $ENV{'EMAIL'};
-  } elsif ($ENV{'USER'} && $ENV{'HOSTNAME'}) {
-    $email = $ENV{'USER'} . "@" . $ENV{'HOSTNAME'};
-  } elsif ($ENV{'USER'} && $ENV{'HOST'}) {
-    $email = $ENV{'USER'} . "@" . $ENV{'HOST'};
-  } elsif ($ENV{'USER'}) {
-    chomp($email = `hostname`);
-    ($email)=gethostbyname($email);
-    $email = $ENV{'USER'} . "@" . $email;
-  } else {
-    $email = "unknown\@somewhere";
-  }
 
   $currentscreen=newwin(5,50,int($LINES/2)-3,int($COLS/2)-25);
   addstr($currentscreen,0,int($COLS/2)-5,"New Message");
@@ -1537,7 +1553,7 @@ sub PostMessage {
 
   # Create the header for the message
   open(FILE,">$filename");
-  print FILE "From $AUTHOR \($email\) $date\n";
+  print FILE "From $AUTHOR \($EMAIL\) $date\n";
   print FILE "Subject: $subject\n";
   print FILE "X-msgs-client: vmsgs $VERSION\n";
   print FILE "Msgs-Posting-Host: ",$ENV{'HOST'},"\n" if (!$LOCAL);
@@ -1607,19 +1623,6 @@ my ($msgnum)=@_;
 &DEBUG("Temp filename is $filename\n");
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";
-  if ($ENV{'EMAIL'}) {
-    $email = $ENV{'EMAIL'};
-  } elsif ($ENV{'USER'} && $ENV{'HOSTNAME'}) {
-    $email = $ENV{'USER'} . "@" . $ENV{'HOSTNAME'};
-  } elsif ($ENV{'USER'} && $ENV{'HOST'}) {
-    $email = $ENV{'USER'} . "@" . $ENV{'HOST'};
-  } elsif ($ENV{'USER'}) {
-    chomp($email = `hostname`);
-    ($email)=gethostbyname($email);
-    $email = $ENV{'USER'} . "@" . $email;
-  } else {
-    $email = "unknown\@somewhere";
-  }
 
   &LoadHeader($msgnum);
 
@@ -1636,7 +1639,7 @@ my ($msgnum)=@_;
 
     &DEBUG("Followup: Creating the followup message\n");
   open(FILE,">$filename");
-  print FILE "From $AUTHOR \($email\) $date\n";
+  print FILE "From $AUTHOR \($EMAIL\) $date\n";
   print FILE "Subject: $subject\n";
   print FILE "Followup-to: $msgnum\n";
   print FILE "X-msgs-client: vmsgs $VERSION\n";
@@ -1821,7 +1824,11 @@ sub aaaaggghhhh {
 # Saves the .msgsrc file before dying
   my($worked);
 
-  $worked=&SetRC($msgstat{maxmsg}+1);
+  if (!$msgstat{maxmsg}) {
+    $worked=&SetRC(&NumMessages());
+  } else {
+    $worked=&SetRC($msgstat{maxmsg}+1);
+  }
 
   if ($curses_on) {
     &DoneCursesWindows(%screen);
@@ -1946,14 +1953,29 @@ sub GetCommandLine {
 
   my($i,$lastvar);
 
-  foreach $i ( 0 .. $#ARGV ) {
-    if ($ARGV[$i] =~ m/^-(\w*)/) {
-      &DEBUG("defining \$opt_$1\n");
-      eval "\$opt_$1 = 1";
-      $lastvar="opt_$1";
-    } else {
-      &DEBUG("setting \$$lastvar to $ARGV[$i]\n");
-      eval "\$$lastvar = $ARGV[$i]";
+  if (-f ".vmsgsrc") {
+    open(RC,".vmsgsrc");
+    while(<RC>) {
+      if (m/^-?(\w+)/) {
+        &DEBUG("defining \$opt_$1\n");
+        eval "\$opt_$1 = 1";
+      } elsif (m/^-(\w+)\s+(.*)$/) {
+        &DEBUG("setting \$$1 to $2\n");
+        eval "\$opt_$1 = $2";
+      }
+    }
+    close(RC);
+  } else {
+     
+    foreach $i ( 0 .. $#ARGV ) {
+      if ($ARGV[$i] =~ m/^-(\w*)/) {
+        &DEBUG("defining \$opt_$1\n");
+        eval "\$opt_$1 = 1";
+        $lastvar="opt_$1";
+      } else {
+        &DEBUG("setting \$$lastvar to $ARGV[$i]\n");
+        eval "\$$lastvar = $ARGV[$i]";
+      }
     }
   }
 }  # end GetCommandLine
@@ -1984,12 +2006,14 @@ my($filename)=@_;
 
 sub DoCommandLineHelp {
   print "Command Line Options for vmsgs:
--m <#> Start reading msgs ar msg number #
+-m <#> Start reading msgs at msg number #
 -k    Ignore your kill file
 -r    Read remotely
+-s <name> Set msgs server in remote mode
 -c    Force caching of msgs (Default if in remote mode)
 -n    Don't cache msgs (Default if in local mode)
 -a    Set read ahead size (Default is 5)
+-scroll Scroll msgs instead of redrawing in read mode
 ";
 
 }
@@ -2055,6 +2079,8 @@ my($msg,$type)=@_;
     # Wait until previous async operation is done
     &DEBUG("AsyncRead: Waiting on lock...\n");
     select(undef,undef,undef,0.01);
+
+    &RealSigIO() if ($async_ready);
   }
   
   if ($master_msg_hash->{$msg}->{$type}) {
@@ -2064,9 +2090,9 @@ my($msg,$type)=@_;
   $ASYNC_LOCK=1;
   &DEBUG("AsyncRead: got lock\n");
 
-  $SIG{'USR2'}=\&sigIO;
-
   if (fork()) {
+    $SIG{'USR2'}=\&sigIO;
+
     &DEBUG("AsyncRead: in Parent\n");   
     close(TOPARENT);
 
@@ -2102,11 +2128,11 @@ my($msg,$type)=@_;
 
         if ($type eq "header") {
           $buffer=[ &GetHeader($msg) ];
-          kill('USR2',getppid());
+          kill('USR2',getppid()) || &DEBUG("Didn't send sigusr2!!\n");
           print TOPARENT "header $msg\n";
         } elsif ($type eq "text") {
           $buffer=[ &GetBody($msg) ];
-          kill('USR2',getppid());
+          kill('USR2',getppid()) || &DEBUG("Didn't send sigusr2!!\n");
           print TOPARENT "text $msg\n";
         }
         &DEBUG("AsyncRead-Child: signalled parent that data is ready for msg $msg\n");
@@ -2155,6 +2181,9 @@ sub GetAKey {
 sub sigIO {
 # Called when an async read operation completes
   $async_ready++;
+  &DEBUG("In sigIO.  \$async_ready is $async_ready");
+
+  $SIG{'USR2'}=\&sigIO;
 }
 
 
