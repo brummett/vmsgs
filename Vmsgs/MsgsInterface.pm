@@ -16,7 +16,7 @@ use Vmsgs::Debug;
 
 our @ISA = qw ( Vmsgs::Debug );
 our $VERSION = "1.1";
-our $DEBUG =  1;
+our $DEBUG =  0;
 #our($LOCAL,$SERVER,$MSGSRC);  # globals used by msgs.pl
 
 require "msgs.pl";

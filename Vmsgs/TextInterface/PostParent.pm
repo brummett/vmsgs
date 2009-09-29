@@ -11,7 +11,7 @@ my($self,$msg,$subject) = @_;
   $msg->header("Author", $self->msgsinterface->me);
   $msg->header("Email", $self->msgsinterface->email);
   $msg->header("Date:", scalar(localtime()));
-  $msg->header("X-msgs-client:", "vmsgs " . $main::VERSION);
+  $msg->header("X-msgs-client:", "vmsgs " . $Vmsgs::VERSION);
   $msg->header("X-posting-host:", $ENV{'HOST'}) if ($self->msgsinterface->server);
   $msg->body("");
 } # end _BuildHeaders

@@ -3,7 +3,7 @@
 # vmsgs 3 - A redesign of an improvement for a drop-in replacement for Kees' cool
 # clone of msgs(1).
 #
-# Copyright Anthony Brummett 14 May 2002
+# Copyright Anthony Brummett 29 Sep 2005
 
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -39,6 +39,7 @@ use Getopt::Std;
 use lib "/home/tony/vmsgs3";
 use lib "/usr/local/lib";  # for msgs.pl
 #use ExtUtils::testlib;
+use Vmsgs;
 use Vmsgs::MsgsInterface;
 use Vmsgs::MsgsRules;
 
@@ -59,7 +60,7 @@ use strict;
   
 
 our $DEBUG = 0;
-our $VERSION = "3.0.1";
+our $VERSION = $Vmsgs::VERSION;
 # Command line flags
 our($opt_m,$opt_k, $opt_s, $opt_c, $opt_C, $opt_U, $opt_t, $opt_x, $opt_h, $opt_r);
 

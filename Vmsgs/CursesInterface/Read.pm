@@ -7,6 +7,8 @@ use strict;
 
 our @ISA = qw (Vmsgs::WidgetBase Vmsgs::Debug);
 
+our $DEBUG = 0;
+
 # Implements the widget to read msgs with
 
 # Create a new Read widget
@@ -116,6 +118,11 @@ my($self) = @_;
     $currentline++;
   } # end while
 
+  # decrement it because during the last trip through the above
+  # while() loop, it really shouldn't have incremented it
+  # maybe that while() above should be a for() instead...
+  $currentline--;
+
   $self->Debug("Done drawing, currentline is $currentline");
   $self->currentline($currentline);
 } # end Draw
@@ -148,7 +155,7 @@ my($self,$direction) = @_;
 
 # Called when the user presses J, ENTER or KEY_DOWN to show one more line of the msg
 sub LineDown {
-my($self) = @_;
+my($self,$ok_to_next) = @_;
   my($currentline,$strings);
 
   $self->Debug("In LineDown");
@@ -157,12 +164,16 @@ my($self) = @_;
     
   $currentline = $self->currentline();
   $currentline++;
+print STDERR "Down currentline $currentline\n" if ($DEBUG);
 $self->Debug(sprintf("currentline $currentline total lines %d",scalar(@$strings)));
 
 #  if (($currentline + $self->window()->getmaxy() - 2)>= scalar(@$strings)) {   # We've already shown the whole thing
   if ($currentline > scalar(@$strings)) {   # We've already shown the whole thing
+print STDERR "Down in if block\n" if ($DEBUG);
+    return 1 unless $ok_to_next;  # if downarrow, don't skip to the next
     $currentline = 0;
     my $retval = $self->NextMsg(1);
+print STDERR "retval was $retval\n" if ($DEBUG);
     #return undef if (!$retval);
     $self->Draw();
     return $retval;
@@ -175,6 +186,7 @@ $self->Debug(sprintf("currentline $currentline total lines %d",scalar(@$strings)
   $self->window->move($self->window->getmaxy(),0);
   $self->window->addstr("\r" . $strings->[$currentline]);
 
+print STDERR "Down storing currentline $currentline\n" if ($DEBUG);
   $self->currentline($currentline);
 } # end LineDown
 
@@ -193,12 +205,6 @@ my($self) = @_;
   $self->Debug(sprintf("PageDown currentline $currentline total lines %d",
                        scalar(@$strings)));
 
-#  if ($currentline >= scalar(@$strings)) {  # We're at the end of this msg, go to the next one
-#    if (! $self->msgslist->next()) { # If this was the last msg
-#      return undef;
-#    }
-#    $self->msgsinterface->currmsg($self->msgslist->currentid);
-#    $self->reset();
   if ($currentline >= scalar(@$strings)) {  # We're at the end of this msg, goto the next one
     return undef if (! $self->NextMsg(1));
 
@@ -214,30 +220,37 @@ my($self) = @_;
 
 # Called when the user pressees K or KEY_UP to back up one line of the msg
 sub LineUp {
-my($self) = @_;
-  my($currentline,$strings);
+my($self,$ok_to_next) = @_;
  
   $self->Debug("In LineUp");
 
-  $strings = $self->CacheStrings();
+  my $strings = $self->CacheStrings();
  
-  $currentline = $self->currentline();
-  $currentline--;
-#  return if ($currentline <= 0);  # We're already at the end
-  if ($currentline <= $self->window->getmaxy()) {  # We're already at the end
+  #$currentline = $self->currentline();
+  my $topline = $self->currentline() - $self->window->getmaxy();
+print STDERR "Topline $topline\n" if ($DEBUG);
+print STDERR "currentline ",$self->currentline,"\n" if ($DEBUG);
+  #if ($currentline <= $self->window->getmaxy()) {  # We're already at the end
+  if ($topline < 0) {  # We're already at the top
+print STDERR "In If block\n" if ($DEBUG);
+    return 1 unless $ok_to_next;
     my $retval = $self->NextMsg(-1);
+print STDERR "retval $retval\n" if ($DEBUG);
     $self->Draw();
     return $retval;
   }
  
+  $self->window->move($self->window->getmaxy(),0);
   $self->window->scrollok(1);
   $self->window->scrl(-1);
   $self->window->scrollok(0);
  
   $self->window->move(0,0);
-  $self->window->addstr($strings->[$currentline - $self->window->getmaxy()]);
+  #$self->window->addstr($strings->[$topline - $self->window->getmaxy()]);
+  $self->window->addstr($strings->[$topline]);
+  $self->window->move($self->window->getmaxy(),0);
  
-  $self->currentline($currentline);
+  $self->currentline($self->currentline - 1);
 } # end LineUp
 
 
@@ -421,7 +434,7 @@ my($self,%args) = @_;
       }
 
     } elsif ($char eq "\n" or $char eq KEY_DOWN or $char eq "j" or $char eq KEY_ENTER) {
-      if (! $self->LineDown() ) {
+      if (! $self->LineDown($char eq KEY_DOWN ? 0 : 1) ) {
         $command = "quit";  # because this was the last msg
       }
 
@@ -431,9 +444,9 @@ my($self,%args) = @_;
       }
 
     } elsif ($char eq "k" or $char eq KEY_UP) {
-      $self->LineUp();
+      $self->LineUp($char eq KEY_UP ? 0 : 1);
 
-    } elsif ($char eq "n" or $char eq KEY_LEFT or $char eq "J") {
+    } elsif ($char eq "n" or $char eq KEY_RIGHT or $char eq "J") {
       if (! $self->msgslist->next()) {  # We were already at the last msg
         $command = "quit";
       } else {
@@ -442,13 +455,25 @@ my($self,%args) = @_;
         $self->Draw();
       }
 
-    } elsif ($char eq "p" or $char eq KEY_RIGHT or $char eq "K") {
+    } elsif ($char eq "p" or $char eq KEY_LEFT or $char eq "K") {
       if (! $self->msgslist->prev()) {  # We were already at the first msg
         $command = "quit";
       } else {
         $self->msgsinterface->currmsg($self->msgslist->currentid());
         $self->reset();
         $self->Draw();
+      }
+
+    } elsif ($char eq "P") {  # Go to the parent of this msg
+      my $msg = $self->msgslist->get();
+      if ($msg && $msg->header('Followup-to:')) {
+        my $parentid = $msg->header('Followup-to:');
+        $self->msgsinterface->currmsg($parentid);
+        $self->msgslist->setcurrentid($parentid);
+        $self->reset();
+        $self->Draw();
+      } else {
+        beep();
       }
       
     } elsif ($char eq "r" or $char eq "f") {
@@ -459,12 +484,17 @@ my($self,%args) = @_;
 
     } elsif ($char eq "\t") {
       my $newmsgid = $self->msgsinterface->maxread();
-      $self->Debug("Skipping to the next unread msg $newmsgid");
-      $self->msgsinterface->currmsg($newmsgid+1);
-      $self->msgslist->setcurrentid($newmsgid+1);
-      #$self->currentline(int($self->window->getmaxy() / 2));
-      $self->reset();
-      $self->Draw();
+      my $arenew = $self->msgsinterface->lastmsg() > $self->msgsinterface->maxread();
+      if ($arenew) {
+        $self->Debug("Skipping to the next unread msg $newmsgid");
+        $self->msgsinterface->currmsg($newmsgid+1);
+        $self->msgslist->setcurrentid($newmsgid+1);
+        #$self->currentline(int($self->window->getmaxy() / 2));
+        $self->reset();
+        $self->Draw();
+      } else {
+        $command = "quit";
+      }
 
 
     } elsif ($char eq "h") {

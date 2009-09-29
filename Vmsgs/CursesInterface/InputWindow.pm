@@ -7,7 +7,7 @@ use Vmsgs::WidgetBase;
 use Vmsgs::Debug;
 use strict;
 
-our @ISA = qw ( Vmsgs::Debug Vmsgs::WidgetBase );
+use base qw ( Vmsgs::Debug Vmsgs::WidgetBase );
 
 # Create a new prompt window.  It is centered in the teminal screen,
 # and the text is centered in the window

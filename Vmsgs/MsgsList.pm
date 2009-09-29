@@ -22,6 +22,7 @@ use strict;
 
 our @ISA = qw ( Vmsgs::Debug );
 our $VERSION = "2.0.0";
+our $DEBUG = 0;
 
 # Create a new list object.  The List may be created empty, or initialized with a list of 
 # msgIDs.  Args are:
@@ -34,24 +35,63 @@ my($class,%args) = @_;
 
   my $self = bless {}, $class;
 
-#  $self->start_debug(".vmsgs.debug");
+  $self->start_debug(".vmsgs.debug");
   $self->Debug(sprintf("Creating new MsgsList %d items currentid %d",
                        scalar(@{$args{'msgidlist'}}),
                        $args{'current'}));
   $self->{'msgsinterface'} = $args{'msgsinterface'} || return undef;
   $self->{'msgsrules'} = $args{'msgsrules'};
+print STDERR "msgsrules is $args{'msgsrules'}\n" if ($DEBUG);
   $self->{'list'} = $args{'msgidlist'};
 
   # Initialize the current pointer
   if (!$args{'current'}) {
     $self->{'current'} = 0;
+print STDERR "initializing current pointer from scratch\n" if ($DEBUG);
     $self->_move_ptr(0);
   } else {
+print STDERR "initializing current pointer to $args{'current'}\n" if ($DEBUG);
     $self->setcurrentid($args{'current'});
   }
 
   $self;
 } # end new
+
+
+# Create a new object with the same configuration as the parent,
+# but be able to specify a new list of msgs
+sub clone {
+my($self,%args) = @_;
+  my $class = ref($self) || $self;
+
+  my @list;
+  if (! defined $args{'list'}) {
+print STDERR "Clone's list arg is undef\n" if ($DEBUG);
+    # Copy the parent's list into the new one
+    foreach (@{$self->{'list'}}) {
+      push @list,$_ if $_;
+    }
+  } else {
+print STDERR "Clone's list was given ",scalar(@{$args{'list'}})," items\n" if ($DEBUG);
+    @list = @{$args{'list'}};
+  }
+
+#  my $newobj = $class->new(msgsinterface => $args{'msgsinterface'} || $self->{'msgsinterface'},
+#                           msgsrules => $args{'msgsrules'} || $self->{'msgsrules'},
+#                           msgidlist => \@list,
+#                           current => $args{'current'});
+  my $newobj = bless {}, $class;
+  $newobj->{'msgsinterface'} = $args{'msgsinterface'} || $self->{'msgsinterface'};
+  $newobj->{'msgsrules'} = $args{'msgsrules'} || $self->{'msgsrules'};
+  $newobj->{'list'} = [[$self->minid, $self->maxid]];
+  $newobj->{'current'} = $#list;
+  #$newobj->currentpos($self->{'current'});
+print STDERR "clone's current is ",$newobj->{'current'}," scalar is ",scalar(@list),"\n" if ($DEBUG);
+  $newobj->_move_ptr(0);
+
+  $newobj;
+}
+
 
 
 # Put a bunch of msgIDs at the end of the list
@@ -89,10 +129,8 @@ sub _move_ptr {
 my($self,$direction) = @_;
   my($msg,$current,$checking);
 
-  return unless (scalar(@{$self->{'list'}}));  # return immediately if the list is empty
-
   $current = $self->currentpos();
-  $self->Debug("In _move_ptr direction $direction current $current");
+print STDERR "In _move_ptr direction $direction current $current\n" if ($DEBUG);
   if ($direction > 0) {   # Only allowed to move one position at a time
     $direction = 1;
   } elsif ($direction < 0) {
@@ -106,8 +144,14 @@ my($self,$direction) = @_;
     $current += $direction;  # first, move the pointer
   }
 
+  # This counter is used to break out of the loop if the MsgsRules rejects
+  # too many msgs in a row, rather than just eternally searching backwards
+  # forever
+  my $breakout_counter = 1000;
   NEXT_LOOP:
-  while($current < $self->count() && $current >= 0) {  # If we're still within the list
+  while($current < $self->count() &&
+        $current >= 0 &&
+        $breakout_counter--) {  # If we're still within the list
 
     $msg = $self->{'list'}->[$current];
 
@@ -117,7 +161,7 @@ my($self,$direction) = @_;
       my($low,$high,@splicelist);
       
       ($low,$high) = @$msg;
-      $self->Debug("Moving into range $low .. $high at current $current");
+print STDERR "Moving into range $low .. $high at current $current\n" if ($DEBUG);
 
       if ($low >= $high) {  # If it's not really a range
         $msg = $low;
@@ -131,7 +175,7 @@ my($self,$direction) = @_;
       }
     }
       
-    $self->Debug(sprintf("Stored msg is %s list has %d elements now current is $current", $msg, $self->count()));
+print STDERR sprintf("Stored msg is %s list has %d elements now current is $current\n", $msg, $self->count()) if ($DEBUG);
 
     if (ref($msg)) {  # If it now points to an already-loaded msg
       $self->{'current'} = $current;
@@ -139,12 +183,13 @@ my($self,$direction) = @_;
     } else {
       $msg = $self->{'msgsinterface'}->Get($msg);  # Retrieve the Msg object for this msgID
       if (!defined($self->{'msgsrules'}) or $self->{'msgsrules'}->pass($msg)) {
-        $self->Debug("Retrieved msg passed the Rules test current is $current");
+print STDERR "Retrieved msg passed the Rules test current is $current\n" if ($DEBUG);
+        $breakout_counter = 1000;   # reset the breakout counter
         $self->{'current'} = $current;
         $self->incorporate($msg);
         return $msg;
       } else {    # Didn't pass the Rules test, remove this msgID from the list
-        $self->Debug("Didn't pass the Rules test, removing msgID from the list");
+print STDERR "Didn't pass the Rules test, removing msgID from the list\n" if ($DEBUG);
         splice(@{$self->{'list'}}, $current, 1);
         # $self->_fixup_current_stack($current);
         $current += $direction if ($direction < 0);  # Fixup the current pointer if moving backward
@@ -158,16 +203,27 @@ my($self,$direction) = @_;
   # If we're only checking the current pointer, and we got to the end without finding
   # a good msg, retry the loop going backward
   if ($checking && $direction == 1) {
-    $self->Debug("Didn't check out working forward, trying backward");
+print STDERR "Didn't check out working forward, trying backward\n" if ($DEBUG);
     $current = $#{$self->{'list'}};
     $direction = -1;
     goto NEXT_LOOP;
   }
 
-  $self->Debug("Can't change the pointer, returning undef");
+  if ($breakout_counter < 1) {
+    $self->no_matches(1);
+  }
+print STDERR "Can't change the pointer, returning undef\n" if ($DEBUG);
   return undef;  # We went through the whole list and didn't find a good msg
 } # end _move_ptr
 
+sub no_matches {
+my($self,$val) = @_;
+  if (defined $val) {
+    $self->{'no_matches'} = $val;
+  } else {
+    $self->{'no_matches'};
+  }
+}
 
 sub next {
   $_[0]->_move_ptr(1);
@@ -210,9 +266,6 @@ my($self,$arg) = @_;
 
   if (defined($arg)) {
     $self->Debug("Setting current position trying $arg");
-#    if ($arg < 0) { # if negative, set it to the last one
-#      $arg = $#{$self->{'list'}};
-#    }
     $self->{'current'} = $arg;
     $self->_move_ptr(0);
     $self->Debug(sprintf("Current position is now %d",
@@ -238,8 +291,48 @@ my($self) = @_;
 # How many items are currently in the list
 sub count {
 my($self) = @_;
-  scalar(@{$self->{'list'}});
+return scalar(@{$self->{'list'}});
+  my $retval = 0;
+
+  foreach ( @{$self->{'list'}} ) {
+    if (ref($_) eq 'ARRAY') {
+      $retval += $_->[1] - $_->[0] + 1;
+    } else {
+      $retval++;
+    }
+  }
+  $retval;
 } # end count
+
+# Return the max msgid in the list
+sub maxid {
+my($self) = @_;
+  my $last = $self->{'list'}->[$#{$self->{'list'}}];
+  if (ref($last) eq 'ARRAY') {
+    return $last->[1];
+  } elsif (ref($last) && $last->can('id')) {
+    return $last->id;
+  } elsif (! ref($last)) {
+    return $last;
+  } else {
+    die "Can't get last item from $last\n";
+  }
+}
+
+sub minid {
+my($self) = @_;
+  my $first = $self->{'list'}->[0];
+  if (ref($first) eq 'ARRAY') {
+    return $first->[0];
+  } elsif (ref($first) && $first->can('id')) {
+    return $first->id;
+  } elsif (! ref($first)) {
+    return $first;
+  } else {
+    die "Can't get first item from $first\n";
+  }
+}
+
 
 
 ## The current-save stach shouldn't be used anymore
@@ -298,45 +391,36 @@ sub setcurrentid {
 my($self,$msgid) = @_;
   my($msg,$trypos);
 
-  $self->Debug("Looking to set current list position to msgid $msgid");
+print STDERR "Looking to set current list position to msgid $msgid\n" if ($DEBUG);
 
   $trypos = 0;
   while ($trypos <= $#{$self->{'list'}}) {
-    $self->Debug("Trying position $trypos");
+print STDERR "Trying position $trypos\n" if ($DEBUG);
     $msg = $self->{'list'}->[$trypos];
     if (ref($msg) eq "ARRAY") {  # This is a range element
       my($low,$high,@splicelist);
 
       ($low,$high) = @$msg;
       if ($msgid >= $low and $msgid <= $high)  { # The one we're looking for is in this range
-        $self->Debug("msgid falls into the range $low .. $high");
+print STDERR "msgid falls into the range $low .. $high\n" if ($DEBUG);
 
         @splicelist = $self->_splicerange($msgid, $low,$high);
-        #if ($msgid == $low)  { # If it's the lower bound
-        #  $self->Debug("msgid matches the lower bound");
-        #  @splicelist = ($low, [$low+1, $high]);
-        #} elsif ($msgid == $high)  { # it's the upper bound
-        #  $self->Debug("msgid matches the upper bound");
-        #  @splicelist = ([$low, $high-1], $high);
-        #} else {   # It's somewhere in the middle
-        #  $self->Debug("msgid is in the middle of the range");
-        #  @splicelist = ([$low, $msgid-1], $msgid, [$msgid+1, $high]);
-        #}
          
         splice(@{$self->{'list'}}, $trypos, 1, @splicelist);
         $trypos++ if ($msgid != $low);  # Fixup position if we inserted an item
 
-        $self->dump($trypos-2, $trypos+2);
+        #$self->dump($trypos-2, $trypos+2);
         $self->currentpos($trypos);
         return $trypos;
       } # end if in this range
 
     } elsif (ref($msg) && $msg->id() == $msgid) {  # If it's a Msg object
-      $self->Debug("matched Msg object's id");
+print STDERR "matched Msg object's id\n" if ($DEBUG);
       $self->currentpos($trypos);
+print STDERR "back from setting currentpos\n" if ($DEBUG);
       return $trypos;
     } elsif ($msg == $msgid) {  # If it's a plain msgid and it matches
-      $self->Debug("matched msgid stored in that slot");
+print STDERR "matched msgid stored in that slot\n" if ($DEBUG);
       $self->currentpos($trypos);
       return $trypos;
     }
@@ -384,7 +468,7 @@ my($self,$low,$high) = @_;
   my $current = $self->{'current'};
   my $item = $self->{'list'}->[$current];
 
-  $self->Debug("Dump of MsgList $self from $low to $high: current pos $current current item $item");
+print STDERR "Dump of MsgList $self from $low to $high: current pos $current current item $item\n";
   
   if (!defined($low) or !defined($high)) {
     $low = 0;
@@ -405,10 +489,10 @@ my($self,$low,$high) = @_;
     } else {
       $string .= "raw msgid $item";
     }
-    $self->Debug($string);
+print STDERR $string,"\n";
   } # end while
 
-  $self->Debug("End of Dump");
+print STDERR "End of Dump\n";
 } # end dump
    
 1;

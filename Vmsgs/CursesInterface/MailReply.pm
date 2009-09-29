@@ -68,10 +68,10 @@ my($self) = @_;
     $self->Debug(sprintf("Firing up editor %s starting at line $numlines",
                          $self->{'editor'}));
    
-    def_prog_mode();           # save current tty modes */
     endwin();                  # restore original tty modes */
     system($self->{'editor'} . " +$numlines $filename");
-    curs_set(0);
+    refresh();
+    Vmsgs::CursesInterface->set_kb_mode();
   
     $self->Debug(sprintf("Back from the editor return code %d errstring $!",$? >>8));
   

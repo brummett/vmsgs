@@ -7,7 +7,7 @@ use Vmsgs::WidgetBase;
 use Vmsgs::Debug;
 use strict;
 
-our @ISA = qw ( Vmsgs::WidgetBase Vmsgs::Debug );
+use base qw ( Vmsgs::WidgetBase Vmsgs::Debug );
 
 
 # Create the new window.  Args are
@@ -38,18 +38,31 @@ my($class,%args) = @_;
   $self->{'title'} = $args{'title'};
   $self->{'message'} = $args{'message'};
   $self->{'choices'} = $args{'choices'};
+  $self->{'nocenter'} = $args{'nocenter'};
 
 #  $self->start_debug(".vmsgs.debug");
   $self->Debug(sprintf("Creating new prompt window message %s inputlen %d height %d width %d",
                        $args{'message'},$args{'inputlen'},$args{'height'},$args{'width'}));
 
-  $win = $self->window(new Curses($args{'height'},
-                                  $args{'width'},
-                                  int((getmaxy() - $args{'height'}) / 2),
-                                  int((getmaxx() - $args{'width'}) / 2)));
+  if ($args{'height'} > getmaxy()) {
+    # Asked to create a window taller than the terminal
+    $self->{'scrolly'} = 1;
+    $self->{'height'} = getmaxy() - 2;
+  }
+
+  # Should we both supporting horizontal scrolling windows?
+  if ($args{'width'} > getmaxx()) {
+    print STDERR "Warning createing $class.  Requested width " .
+                 $args{'width'} . " max width " . getmaxx() . "\n";
+    $self->{'width'} = getmaxx() - 2;
+  }
+                   
+  $win = $self->window(new Curses($self->{'height'},
+                                  $self->{'width'},
+                                  int((getmaxy() - $self->{'height'}) / 2),
+                                  int((getmaxx() - $self->{'width'}) / 2)));
   $win->scrollok(0);
   $win->clear();
-  $win->box("|","-");
   $self->panel($self->window->new_panel());
  
   if ($self->{'title'}) {
@@ -58,13 +71,13 @@ my($class,%args) = @_;
   }
  
   # Break up the prompt into the right number of lines
-  $promptwidth = $args{'width'} - 4;  # 4 accounts for the box and space border
-  $args{'prompt'} .= " ";
+  $promptwidth = $self->{'width'} - 4;  # 4 accounts for the box and space border
+  $self->{'prompt'} .= " ";
 
-  @strings = split(/^/, $args{'message'});
+  my @strings = split(/^/, $self->{'message'});
   foreach ( @strings ) {
     while(length($_)) {
-      # if ($args{'message'} =~ s/^(.{1,$promptwidth})\s+//) {
+      # if ($self->{'message'} =~ s/^(.{1,$promptwidth})\s+//) {
       if (m/^\n$/) {
         push(@lines,"");  # an empty line
         $_ = "";
@@ -84,30 +97,48 @@ my($class,%args) = @_;
 
   # Print the lines into the window
   $currentline = 1;
+  $self->{'strings'} = \@lines;
   foreach (@lines) {
-    if ($args{'nocenter'}) {
+    if ($self->{'nocenter'}) {
       $win->addstr($currentline++, 2, $_);  # column 2 skips the box and space border
     } else {
       $win->addstr($currentline++,
-                   int(($args{'width'} - length($_)) / 2),
+                   int(($self->{'width'} - length($_)) / 2),
                    $_);
     }
+    last if ($currentline >= ($self->{'height'} - 3));
   } # end foreach
 
+  $win->box("|","-");
+
+  $self->ShowChoices();
+  $self->ShowScrollbars();
+ 
+  $self->currentline($currentline);
+
+  $self;
+} # end new
+
+
+sub ShowChoices {
+my($self) = @_;
+  my $win = $self->window();
+
   # How wide will all the choices be
-  foreach ( @{$args{'choices'}} ) {
+  my $choicelen = 0;
+  foreach ( @{$self->{'choices'}} ) {
     $choicelen += length($_->[0]) + 1;  # the string length + 1 for the space between
   }
 
-  # Now, print out all the choices
-  $currentline++;  # Leave a blank line before the choices
-  $win->move($currentline, int(($args{'width'} - $choicelen)/2));
-  foreach ( @{$args{'choices'}} ) {
+  # Center the choices on the last line of the window
+  $win->move($self->{'height'} - 2, int(($self->{'width'} - $choicelen)/2));
+
+  foreach ( @{$self->{'choices'}} ) {
     my $firstchar = substr($_->[0], 0,1);
     $self->Debug(sprintf("Checking first char of choice %s with key %s", $firstchar, $_->[1]));
     if ($firstchar eq $_->[1])  { # If they start with the same letter
       $self->Debug("They match, bolding first char of choice");
-      
+
       $win->attron(A_BOLD);
       $win->addch($firstchar);
       $win->attroff(A_BOLD);
@@ -116,11 +147,37 @@ my($class,%args) = @_;
       $win->addstr(sprintf("%s ", $_->[0]));
     }
   } # end foreach
- 
-  $self->currentline($currentline);
+}
 
-  $self;
-} # end new
+
+sub ShowScrollbars {
+my($self) = @_;
+  # If we haven't shown all the way to the bottom
+  my $doshow = ($self->currentline() < scalar(@{$self->{'strings'}}));
+print STDERR "Show bottom scroll $doshow\n";
+
+  $self->window->addstr($self->{'height'} - 4,
+                        $self->{'width'} - 2,
+                        $doshow ? '|' : ' ');
+  $self->window->addstr($self->{'height'} - 3,
+                        $self->{'width'} - 2,
+                        $doshow ? '|' : ' ');
+  $self->window->addstr($self->{'height'} - 2,
+                        $self->{'width'} - 2,
+                        $doshow ? 'V' : ' ');
+
+  $doshow = ($self->currentline() > $self->{'height'});
+print STDERR "Show top scroll $doshow\n";
+  $self->window->addstr(4,
+                        $self->{'width'} - 2,
+                        $doshow ? '|' : ' ');
+  $self->window->addstr(3,
+                        $self->{'width'} - 2,
+                        $doshow ? '|' : ' ');
+  $self->window->addstr(2,
+                        $self->{'width'} - 2,
+                        $doshow ? '^' : ' ');
+}
 
 
 sub input {
@@ -133,7 +190,7 @@ my($self) = @_;
   foreach ( @{$self->{'choices'}} ) {
     $choices .= $_->[1];
   }
-  $choices .= "\n";  # To choose the default answer
+  $choices .= "\n\033";  # To choose the default answer, and for escape
 
   noecho();
   $self->Debug("Getting input from the user allowed choices >>$choices<<");
@@ -141,6 +198,15 @@ my($self) = @_;
     $char = getch();
     next unless ($char != -1);
     $self->Debug("Got a key $char");
+
+    if ($char eq KEY_UP && $self->{'scrolly'}) {
+      $self->LineUp();
+      redo;
+
+    } elsif ($char eq KEY_DOWN && $self->{'scrolly'}) {
+      $self->LineDown();
+      redo;
+    }
   }
 
   $self->Debug("input char was >>$char<<\n");
@@ -151,4 +217,38 @@ my($self) = @_;
   $char;
 } # end input
 
+
+
+sub LineDown {
+my($self) = @_;
+  my $currentline = $self->currentline();
+  $currentline++;
+
+  # If we haven't shown the whole thing yet
+  if ($currentline <= scalar(@{$self->{'strings'}})) { 
+    print STDERR "scrolling down currline $currentline strings ",scalar(@{$self->{'strings'}}),"\n";
+    $self->window->scrollok(1);
+    $self->window->scrl(1);
+    $self->window->scrollok(0);
+    $self->window->addstr($self->{'height'} - 3,
+                          1,
+                          " " x ($self->{'width'} - 2));
+    print STDERR "adding string >>",$self->{'strings'}->[$currentline],"<<\n";
+    $self->window->addstr($self->{'height'} - 3,
+                          2,
+                          $self->{'strings'}->[$currentline]);
+  }
+
+  $self->currentline($currentline);
+  
+  $self->ShowScrollbars();
+  $self->window->box("|","-");
+  update_panels();
+  doupdate();
+}
+
+sub LineUp {
+my($self) = @_;
+ 
+}
 1;

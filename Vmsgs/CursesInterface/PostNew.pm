@@ -78,32 +78,34 @@ my($self,$subject) = @_;
   $msg->header("Author", $self->msgsinterface->me);
   $msg->header("Email", $self->msgsinterface->email);
   $msg->header("Date:", scalar(localtime()));
-  $msg->header("X-msgs-client:", "vmsgs " . $main::VERSION);
+  $msg->header("X-msgs-client:", "vmsgs " . $Vmsgs::VERSION);
   $msg->header("X-posting-host:", $ENV{'HOST'}) if ($self->msgsinterface->server);
   $msg->body("");
-
+  
   $msg->AppendSig();
   $self->Debug("Creating empty msg as file $filename");
   $msg->SaveToFile($filename);
+    
+  do { 
+    $self->Debug(sprintf("Firing up editor %s",
+                         $self->{'editor'}));
+   
+    endwin();                  # restore original tty modes */
+    system($self->{'editor'} . " +7 $filename");
+    refresh();
+    Vmsgs::CursesInterface->set_kb_mode();
   
-  $self->Debug(sprintf("Firing up editor %s",
-                       $self->{'editor'}));
- 
-  def_prog_mode();           # save current tty modes */
-  endwin();                  # restore original tty modes */
-  system($self->{'editor'} . " +7 $filename");
-  curs_set(0);
+    $self->Debug(sprintf("Back from the editor return code %d errstring $!",$? >>8));
+  
+    $ask = new Vmsgs::CursesInterface::PromptWindow(height => 6,
+                                                    width => 48,
+                                                    title => "Confirm",
+                                                    message => "Post this message?",
+                                    choices => [["Send", "S"],["Edit again","E"],["Forget it", "F"],["Dump to /dev/null", "D"]]);
+    $char = $ask->input();
+    $self->Debug("Read a >>$char<<");
+  } while ($char =~ m/e/i);
 
-  $self->Debug(sprintf("Back from the editor return code %d errstring $!",$? >>8));
-
-  $ask = new Vmsgs::CursesInterface::PromptWindow(height => 6,
-                                                  width => 38,
-                                                  title => "Confirm",
-                                                  message => "Post this message?",
-                                  choices => [["Send", "S"],["Forget it", "F"],["Dump to /dev/null", "D"]]);
-  $char = $ask->input();
-
-  $self->Debug("Read a >>$char<<");
   if ($char =~ m/s/i) {
     $self->Debug("Posting msg!");
     $msg = new Vmsgs::Msg();

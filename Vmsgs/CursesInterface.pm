@@ -21,12 +21,11 @@ use Vmsgs::CursesInterface::MailReply;
 use strict;
 
 our @ISA = qw ( Vmsgs::Debug );
+our $DEBUG = 0;
 
 # Implements the curses interface for vmsgs.  Requires the libpanel stuff too
 
 our $VERSION = "1.0";
-our $DEBUG = 1;
-
 
 sub new {
 my($class,$state) = @_;
@@ -38,6 +37,7 @@ my($class,$state) = @_;
 
   $self->start_debug(".vmsgs.debug") if ($DEBUG);
   $self->Debug("creating new CursesInterface object");
+  $self->{'search_level'} = 0;
 
   $self;
 } # end new
@@ -70,12 +70,14 @@ my($self,$state) = @_;
     exit(0);
   };
 
+  #$SIG{'CONT'} = sub {
+  #  refresh();
+  #  $topwindow->Draw();
+  #  1;
+  #};
+
   initscr();
-  noecho();
-  cbreak();
-  keypad(1);
-  halfdelay(100);  # Check for new msgs every 10 seconds
-  curs_set(0);  # make the cursor invisible
+  $self->set_kb_mode();
 
   $self->Debug(sprintf("In Curses mode currmsg is %s",
                        $state->{'msgs'}->currmsg()));
@@ -92,6 +94,17 @@ my($self,$state) = @_;
 
   $self->Debug("Exited from top-level MainLoop");
 } # end Init
+
+
+sub set_kb_mode {
+  noecho();
+  cbreak();
+  keypad(1);
+  halfdelay(100);  # Check for new msgs every 10 seconds
+  curs_set(0);  # make the cursor invisible
+}
+
+
 
 
 sub MainLoop {
@@ -121,12 +134,14 @@ my($self,%args) = @_;
       push(@windowstack,$topwindow);
       $topwindow = new Vmsgs::CursesInterface::PostNew(msgsinterface => $msgsinterface,
                                                        editor => $self->{'state'}->{'editor'});
+      $self->set_kb_mode();
 
     } elsif ($command eq "followup") {
       push(@windowstack,$topwindow);
       $topwindow = new Vmsgs::CursesInterface::Followup(msgsinterface => $msgsinterface,
                                                         editor => $self->{'state'}->{'editor'},
                                                         msgid => $msgid);
+      $self->set_kb_mode();
 
     } elsif ($command eq "savemsg") {
       push(@windowstack,$topwindow);
@@ -147,12 +162,38 @@ my($self,%args) = @_;
       $topwindow = new Vmsgs::CursesInterface::MailReply(msgsinterface => $msgsinterface,
                                                         editor => $self->{'state'}->{'editor'},
                                                         msgid => $msgid);
+      $self->set_kb_mode();
   
     } elsif ($command eq "jump") {
       $msgid = $self->JumpMsg($topwindow,$msgid,$msgslist->currentid());
       $msgslist->setcurrentid($msgid);
       $msgsinterface->currmsg($msgslist->currentid());
       $topwindow->Draw();
+
+    } elsif ($command eq "dosearch") {
+      my $oldrules = $self->{'state'}->{'rules'};
+      my $newrules = $self->{'state'}->{'rules'} = $oldrules->clone();
+      $newrules->prepare_search();
+      $newrules->unshift(@$msgid); # After a search dialog, $msgid is the search query ['read','from','authorname'] for example
+
+      my $newlist = $msgslist->clone(msgsrules => $newrules);
+      if ($newlist->no_matches()) {  # the search terms didn't find anything
+        $self->NoSearchMatches();
+      } else {
+        $self->{'search_level'}++;
+print STDERR "Before setting currentid of new msgslist\n" if ($DEBUG);
+        $newlist->setcurrentid($msgslist->currentid);
+        my $newtopwindow = Vmsgs::CursesInterface::Select->new(msgsinterface => $msgsinterface,
+                                                               msgslist => $newlist,
+                                                               name => "search (".$self->{'search_level'}.")");
+print STDERR "Created new select widget\n" if ($DEBUG);
+        ($command,$msgid) = $self->MainLoop(msgslist => $newlist,
+                                            topwindow => $newtopwindow);
+        $self->{'search_level'}--;
+print STDERR "Back from MainLoop\n" if ($DEBUG);
+      }
+      $self->{'state'}->{'rules'} = $oldrules;
+      $topwindow = pop(@windowstack);
 
     } elsif ($command eq "checkmarks") {
       if (&CheckMarks($msgsinterface)) {
@@ -208,6 +249,17 @@ my($self,$msgsinterface,$msgslist,$rules) = @_;
     $msgsinterface->lastmsg($newlastmsg);
   } # end if
 } # end IncorporateNewMsgs
+
+
+sub NoSearchMatches {
+my($self) = @_;
+  my $win = Vmsgs::CursesInterface::PromptWindow->new(height => 6,
+                                                      width => 26,
+                                                      title => "No Matches",
+                                                      message => "There were no matches to your search");
+  $win->input();
+};
+
 
 
 # Called when the user starts to enter a number to jump to a msg by ID#
@@ -337,9 +389,7 @@ my($self,$msgsinterface) = @_;
 
   $msgslist;
 } # end BuildMarkedMsgsList
-  
 
-  
 
 # update the screen then block until the user presses a key
 sub NullLoop {

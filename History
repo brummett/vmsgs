@@ -1,5 +1,13 @@
 # Revision History
 
+# V 3.1.2 After posting a new msg or a followup, there's a new option "E"
+#         to re-edit your msg before posting.  Added "P" keypress on
+#         the selection screen to jump to the parent, just like the
+#         read widget  10/04/05
+# V 3.1.1 Fixed tons of old and current bugs.  Added more key aliases to match
+#         with mutt.  Stacking searches works.  P takes you to previous-in-
+#         thread.  9/29/05
+# V 3.1.0 Searching for one thing at a time is finally working 9/20/05
 # V 3.0.2 Bunch of bugfixes so far after letting others play with it.  These
 #         include: don't check executableness of $EDITOR or $MSGS_EDITOR,
 #         since we didn't search the path, don't seperate the body from the

@@ -30,7 +30,7 @@ my($class,%args) = @_;
   # Initialize the internal state
   $self->msgsinterface($args{'msgsinterface'});
   $self->msgslist($args{'msgslist'});
-  $self->state("selection");
+  $self->state($args{'name'} || "selection");
   
   # Create the titlebar
   $win = new Curses(1,0,0,0);
@@ -270,7 +270,7 @@ my($self) = @_;
   $winhandle->move(0,0);
   $winhandle->addstr(" " x $winhandle->getmaxx());
 
-  $winhandle->addstr(0,0,sprintf("vmsgs %8s",$main::VERSION));
+  $winhandle->addstr(0,0,sprintf("vmsgs %8s",$Vmsgs::VERSION));
   my $fromstring = "from " . ($self->msgsinterface->server() || "local");
   $winhandle->addstr(0,55,sprintf("%25s", $fromstring));
 } # end DrawTitlebar
@@ -367,13 +367,13 @@ my($self,%args) = @_;
     } elsif  ($char eq "j" or $char eq KEY_DOWN or $char eq "J") {
       $self->KeyDown();
 
-    } elsif ($char eq KEY_PPAGE or $char eq KEY_A3) {
+    } elsif ($char eq KEY_PPAGE or $char eq KEY_A3 or $char eq KEY_LEFT) {
       my $count = $self->window->getmaxy();
       while ($count-- && $self->msgslist->prev()) {;}  # Decrement the msglist pointer $count times
       $self->msgsinterface->currmsg($self->msgslist->currentid());
       $self->Draw();
 
-    } elsif ($char eq KEY_NPAGE or $char eq KEY_C3) {
+    } elsif ($char eq KEY_NPAGE or $char eq KEY_C3 or $char eq KEY_RIGHT) {
       my $count = $self->window->getmaxy();
       while ($count-- && $self->msgslist->next()) {;}  # Increment the msglist pointer $count times
       $self->msgsinterface->currmsg($self->msgslist->currentid());
@@ -413,18 +413,31 @@ my($self,%args) = @_;
       $self->currentline(int($self->window->getmaxy() / 2));
       $self->Draw();
 
+    } elsif ($char eq "P") {  # Go to the parent of this msg
+      my $msg = $self->msgslist->get();
+      if ($msg && $msg->header('Followup-to:')) {
+        my $parentid = $msg->header('Followup-to:');
+        $self->msgsinterface->currmsg($parentid);
+        $self->msgslist->setcurrentid($parentid);
+        $self->Draw();
+      } else {
+        beep();
+      }
+
     } elsif ($char eq "\t") {
       my $newmsgid = $self->msgsinterface->maxread();
+      my $arenew = $self->msgsinterface->lastmsg() > $self->msgsinterface->maxread();
       $self->Debug("Skipping to the next unread msg $newmsgid");
-      $self->msgsinterface->currmsg($newmsgid+1);
-      $self->msgslist->setcurrentid($newmsgid+1);
+      $self->msgsinterface->currmsg($newmsgid + $arenew);
+      $self->msgslist->setcurrentid($newmsgid + $arenew);
       $self->currentline(int($self->window->getmaxy() / 2));
       $self->Draw();
 
-    } elsif ($char eq KEY_RIGHT or $char eq KEY_LEFT) {
-      # Check for these keys specificly because they screw
-      # up the digit detection
-      beep();
+#    } elsif ($char eq KEY_RIGHT or $char eq KEY_LEFT) {
+#      # Check for these keys specificly because they screw
+#      # up the digit detection
+# Really? Still? seems to work ok now 28 sep 05
+#      beep();
 
     } elsif ($char =~ m/\d/) {  # Jump to a msg by ID 
       $command = "jump";

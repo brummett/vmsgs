@@ -52,19 +52,66 @@ MR 11 - stonedwestyp - C should be an alais for N to create a new msg 7/12/02
 
 MR 12 - techne - For longer-than-1-page posts, hitting return instead of
 space makes you miss some lines  7/12/02
+FIX  Vmsgs::CI::Read->Draw()'s while loop was setting $currentline one
+too high because of the way the loop worked  9/28/05
 
 MR 13 - ivan - problem with vmsgs3-- if i ctrl-z out of my editor (vi) and
 come back in, it doesn't respond to single keystrokes anymore-- so i ahve
 to type 'qq' to quit, 'ss' to save, 'ff' to forget, only this last time
 it sent me into wacko mode and saved a reply for the current post i was at.
 7/17/02
+FIX After each system() to run the editor (in Followup, PostNew and MailReply)
+do a refresh() and reset the keyboard settings with 
+Vmsgs::CursesInterface->set_kb_mode()  9/28/05
 
 MR 14 - aethyric - How about some color?  2/5/03
 
 MR 15 - chris - Down arrow on multi-page posts sometimes loses some
 lines - probably the same as MR12  11/13/03
+FIX see MR 12  9/28/05
 
 MR 16 - nemesis - Add keybindings for J and K so they always go to the 
 next or previous message no matter what mode the program is in.  Also add
 a key <tab> that moves the current position to the next unread msg 7/13/05
 FIX Added the keybindings to CursesInterface::Read and ::Select 7/14/05
+
+MR 17 - tony - Get searching working 9/20/05
+FIX Searching is implemented as cloning the MsgsList object and applying
+a new MsgsRules object containg the search 9/20/05
+
+MR 18 - tony - Make a machine-wide cache manager, should probably tie in
+with MR 17  9/20/05
+
+MR 19 - tony - Get remote reading working again  9/20/05
+
+MR 20 - tony - Should be able to connect to the SSL port for remote
+reading  9/20/05
+
+MR 21 - tony - Hitting <tab> (see MR 16) when there aren't any new msgs makes
+the current-hilight disappear 9/26/05
+FIX When searching for the next unread msg, it first checks to see if there
+are actually any unread.  If not, it just takes you to the end 9/28/05
+
+MR 22 - tony - Starting a search always puts you at the last msg, it should
+try to keep your current position 9/26/05
+FIX Before handing control off to the new selection widget, set the currentid
+of the cloned MsgsList to the same as the original MsgsList 9/29/05
+
+MR 23 - tony - Make <- and -> aliases for pageup/pagedown in the select screen
+for compatibility with mutt 9/26/05
+FIX Added the key aliases to Vmsgs::CursesInterface::Search::Run to do the
+same as KEY_PPAGE/KEY_NPAGE 9/28/05
+
+MR 24 - tony - You should be able to "stack" searches.  For example, first
+search for subject="foo", then for author="bob" within those results 9/26/05
+FIX Changed the way MsgsRules works so that for "search"-type rules, msgs
+must pass all rules, while "normal"-type rules, msgs must pass any one rule.
+9/28/05
+
+MR 25 - tony - in reply/postnew/mailreply, when you get into vi and then
+shell out (:sh), nothing at all (keystrokes or program output) is echoed to
+the terminal until you get back to vi.  Normal operation continues after you
+get back to vmsgs code, too.  See also MR 13 9/28/05
+
+MR 26 - ceaste - dies when you try to being up the help window in a terminal
+shorter than 28 chars tall.  11/16/05
