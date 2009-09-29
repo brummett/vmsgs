@@ -1,0 +1,17 @@
+vmsgs - A redesign of an improvement for a drop-in replacement for the old
+Sequent UNIX msgs tool
+
+In the late summer of 1996, a conferencing system called msgs (pronounced
+"messages") was developed on a privately owned Linux computer system on the
+Internet.  It's like usenet with only one newsgroup, or an email box where
+everyone sees the same messages.  In the 13 years it's been around, there 
+have been almost three quarters of a million messages posted.
+
+The original msgs tool is a simple text console app with basic reading and
+posting abilities.  vmsgs aimed to replace it with a full-screen curses-based
+application.  It's development started in August of 1996, though no new
+development since 2006.  It is still used every day.
+
+vmsgs is distributed under the terms of the GNU General Public License.
+msgs.pl is support code, primarily from Kees Cook.
+
