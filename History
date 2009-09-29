@@ -1,0 +1,133 @@
+# Revision History
+
+# V 3.0.2 Bunch of bugfixes so far after letting others play with it.  These
+#         include: don't check executableness of $EDITOR or $MSGS_EDITOR,
+#         since we didn't search the path, don't seperate the body from the
+#         sig with --, ^L wasn't redrawing the screen, -k wasn't working,
+#         etc.  See the vmsgs.mr up to today's date  7/10/02
+# V 3.0.1 Good enough to say it's released.  All bugs from the Curses interface
+#        are fixed (scroll-down-one bug in CursesInterface/Read.pm).  Text
+#        interface rewritten to be widget-based and get rid of the now-unneeded 
+#        TimerQueue and EventQueue 5/14/02
+# V 3.0.0pre3 The "further back than 50" limitation is gone.  MsgList.pm
+#        now is able to encode ranges without actually checking all the
+#        msgIDs in the range until they're needed  2/7/02
+# V 3.0.0pre2 Releasing for beta testing.  Msg.pm changed to return the
+#        non standard headers, too (header) 11/29/01
+# V 3.0.0pre1 All known bugs are fixed.  Search isn't implemented yet,
+#        and there's still no way to view msgs further back then 50 before
+#        the current one yet.  11/28/01
+# V 3.0.0beta3 Changed over to a new MsgsList object implementation 11/27/01
+# V 3.0.0beta2 Curses interface mostly working  11/20/01
+# V 3.0.0beta1 Text interface functionality seems to be working fine
+#        2/9/01
+# V 2.99.0 Another complete rewrite.  Instead of one big spaghetti program
+#        using msgs.pl, it's now broken up into logical modules.  One goal is
+#        to have both a Curses and Tk interfaces (or mabye gtk or Qt instead)
+#        1/25/01 still under development
+#############################################################################
+# V 2.98.1 vmsgs.debug files are now only created in the users home directory
+#        (StartDebug) 9/28/00
+# V 2.98 .msgsrand file is now supported for the "interesting" $0s (PickArgv0)
+#        11/10/99
+# V 2.97 Lines could get cut off if some lines in the post exceeded the
+#        width of the terminal.  Now, it chops the lines up as it reads
+#        them in to fit ther terminal's width (AsyncRead)  7/14/99
+# V 2.96 Changed a bunch of stuff when we went to the new Lucien machine.
+#        The main problem was that sigalrm-s weren't getting sent any more, so
+#         looking for new messages is now done with polling  4/12/99
+# V 2.95 Added "w" key for writing the current msg to a file (SelectMessage,
+#        ReadMessage, WriteFile(new), GetHomeDir(new), DoHelp) 11/3/98
+# V 2.94 Added scrolling msg display instead of redraw (ReadMessage,
+#        GetCommandLine).  Added support for an rc file (.vmsgsrc) so you
+#        don't have to remember all the command line switches (GetCommandLine)
+#        Fixed getting the user and host names (main,PostMessage,Followup)
+#        .msgsrc should now be correct after an abort with ^C (aaaaggghhhh,
+#        InitMsgStat) 9/17/97
+# V 2.93 Enabled use of the arrow keys - added a call to keypad() (main)
+#        Created a wrapper for getch to handle reading from the child on
+#        async reads - should fix random segfaults and bus errors (sigIO,
+#        RealSigIO,GetAKey(new),InitMasterMsgHash).  Prints blank line for
+#        non-existant msgs instead of barfing (PrintMsgInfoLine) 9/11/97
+# V 2.92 Updated header parse function to look for non-whitespace chars
+#        for the author instead of word characters (ParseHeader)
+#        Spread out writes to the screen to look for segfaults
+#        (PrintMsgsInfoLine) 9/9/97
+# V 2.91 Reads from the server are now done with Async I/O (LoadHeader,
+#        LoadBody, AsyncRead(new), sigIO(new)) 8/22/97
+# V 2.90 Big rewrite to interface more smoothly with msgs.pl.  Headers and
+#        bodies are now only read in when absolutely needed - should
+#        speed up startup time.  Content-length: header now used properly.
+#        Cheesy read ahead implimented - automaticly reads in three msgs.
+#        8/18/97
+###########################################################################
+# V 2.33 Added -m command line option to start reading at a given msg #
+#        (GetCommandLine, InitMsgStat).  If reading remotely, it only
+#        loads 30 msgs prior to the current one instead of 100 for local
+#        reading (InitMsgStat) 8/14/97
+# V 2.32 Fixed a bug where a cached msg wasn't being used properly
+#        (dreferencing a reference incorrectly) (Followup, MailReply) 8/5/97
+# V 2.31 Help screen wasn't clearing the window before writing to it
+#        (DoHelp).  Mail wasn't getting sent to the right address with remote
+#        postings (MailReply).  Return email address wasn't always right
+#        (PostMessage, Followup)  msgsrc is now centrally located.
+#        InitMsgStat, aaaaggghhhh, main()) 7/30/97
+# V 2.30 Support for remote msg reading.  Lots of new stuff rewritten to
+#        use the msgsd API (msgsd.pl)  (FirstMessage, NumMessages,
+#        CreateMsgsArray, ReadMessage, PostMessage, Followup, MailReply,
+#        sigalrm, ShouldKillfile).  Msgs can be cached (CreateMsgsArray,
+#        ReadMessage, Followup, sigalrm) 7/29/97
+# V 2.20 Messages are now seperated by 1000s (/var/msgs/13000.dir).
+#        (CreateMsgsArray, PostMessage, Followup, ReadMessage, IncBoundsFile,
+#        sigalrm, ShouldKillFile, SearchMessages, GetMsgDir2(new)).
+#        Temoprary messages are now stored in the user's home directory
+#        instead of /tmp (PostMessage, Followup).  Now you can mail a reply
+#        to someone's message (SelectMessage, ReadMessage, MailReply(new)).
+#        4/29/97
+# V 2.12 If you put in a blank subject in a new message, it'll ask if you
+#        want to forget the message, like in elm. (PostMessage)  3/12/97
+# V 2.11 Make it so the sig is added before it fires up the editor
+#        (PostMessage, Followup)   3/6/97
+# V 2.1  Added support for a .msgssig file (PostMessage, Followup,
+#        AppendSig(new)).  Preliminary work started on threading during read
+#        mode
+# V 2.00 Added 2 columns to the display so there's room for 5-digit msg IDs
+#        (PrintMsgInfoLine).  New msg notification now works correctly
+#        (sigalrm).
+# V 1.95 Fixed an oversight where it'd get into an endless loop if you killfile
+#        everything (main()). Added -k flag to ignore the kill file
+#        (GetCommandLine, ReadKillfile).  Dosen't core dump when you ^C
+#        (aaaaggghhhh).  Fixed the segfault returning from search mode -
+#        forgot a local() (SearchMessages).  Message count on the title
+#        bar is now always correct (SelectMessage).  Did an audit of calls
+#        to refresh(), touchwin() and clear() to try and get rid of some
+#        of the redraws - it didn't help much.
+# V 1.94 Made the changes to kill files (.msgskill) so it works right. Added
+#        uid kills (ShouldKillfile, CreateMsgsArray, main(), ReadKillfile)
+# V 1.93 Added the -all flag (it'll only read 100 messages prior to the
+#        current message, unless you give it -all. This will speed up startup
+#        time). Added a umask call so msgs are set world-readable (main(),.
+#        InitMsgsStat)
+# V 1.92 Fixed a bug where newly arrived messages' dates and lengths were not
+#        parsed correctly (sigalrm). Messages with no body are now handled
+#        correctly (ReadMessage).
+# V 1.91 Selection screen now scrolled instead of redrawn (SelectMessage).
+#        Support for recognizing pre-posted messages (IncBoundsFile). Quicker
+#        updates of newly arrived messages (now reads only new messages,
+#        instead of all of them) (sigalrm).
+# V 1.90 Complete rewrite. Changed over to curses stuff. Added searching,
+#        killfiles. Info about messages is now stored in a hash (to reduce
+#        disk I/O while running) and passed around by a reference to that
+#        hash.
+#############################################################################
+# V 1.03 Fixed a bug in DrawScreen that wouldn't print the name or date
+#        correctly if the message was posted between midnight and noon
+#        (single digit hours). Also, it won't make the subject full of
+#        Re:'s on a reply  9/23/96
+# V 1.02 Moved around the calls to stty so it dosen't need to be run as often.
+#        Added signal handler for SIGcont.
+# V 1.01 Changed GetAChar so it dosen't echo the character you get.
+#        Added some keypress aliases. Added signal handlers.  8/30/96
+# V 1.00 Original release.  8/29/96
+
+

@@ -1,0 +1,70 @@
+MR 1 - aethyric - EDITOR or MSGS_EDITOR not honoroed  5/15/02
+FIX get rid of -x check for candidate editor in vmsgs  5/15/02
+
+MR 2 - shikko - .msgssig gets put in when replying to a message, but not when
+starting a new one  5/16/02
+FIX Forgot to call $msg->AppendSig() before starting the editor  5/16/02
+
+MR 3 - techne - when I use return to scroll through msgs and get to the last
+one, hitting return again doesn't take me to the list but leaves me on a
+blank or a msg screen, I have to hit i or something.  except for
+sometimes, when it does take me to the list like it used to...  5/16/02
+FIX CursesInterface::Read::Run wasn't checking the return value from
+LineDown() 5/16/02
+
+MR 4 - nemesis - Automaticly appended .sigs shouldn't have the '--' line
+before them  5/16/02
+FIX Vmsgs::Msg.pm::AppendSig changed to only append the sig file contents
+but not the -- line  5/16/02
+
+MR 5 - erik - After making up a post, it only accepts lower case 's' for
+send, should be case insensitive  5/17/02
+FIX Replace the $char eq "s" test in CursesInterface::PostNew and Followup
+with a case-insensitive match  5/17/02
+
+MR 6 - erik - In the select screen, names should be left justified for 
+easier eye-scanning  5/19/02
+FIX Changed the sprintf sormat string in
+CursesInterface::Select::PrintMsgsInfoLine to left-justify the author field
+5/20/02
+
+MR 7 - bruise - page-up/down keys on the keypad don't work 5/20/02
+On Watch - It seems to have something to do with whatever Mac terminal
+program she's using
+Possible fix - Added alises for page up/down as KEY_A3 and KEY_C3.  The
+man page curs_getch seems to imply that it might help.  7/10/02
+
+MR 8 - caffeine - control-L in the select screen dosen't redraw the screen
+5/24/02
+FIX - CursesInterface::Select::Run now looks for \cL's and calls Draw()
+5/24/02
+
+MR 9 - bzimmerman - -k option dosen't work 5/27/02
+FIX Vmsgs::MsgsRules constructor takes a skip argument that tells it
+to pass every msg 5/28/02
+
+MR 10 - jes - Hitting right arrow brings up the 'jump to msg' window 7/10/02
+FIX Check for KEY_RIGHT and KEY_LEFT before matching for digits, since
+the scancodes for left/right arrow apparently contain digit characters, too
+7/10/02
+
+MR 11 - stonedwestyp - C should be an alais for N to create a new msg 7/12/02
+
+MR 12 - techne - For longer-than-1-page posts, hitting return instead of
+space makes you miss some lines  7/12/02
+
+MR 13 - ivan - problem with vmsgs3-- if i ctrl-z out of my editor (vi) and
+come back in, it doesn't respond to single keystrokes anymore-- so i ahve
+to type 'qq' to quit, 'ss' to save, 'ff' to forget, only this last time
+it sent me into wacko mode and saved a reply for the current post i was at.
+7/17/02
+
+MR 14 - aethyric - How about some color?  2/5/03
+
+MR 15 - chris - Down arrow on multi-page posts sometimes loses some
+lines - probably the same as MR12  11/13/03
+
+MR 16 - nemesis - Add keybindings for J and K so they always go to the 
+next or previous message no matter what mode the program is in.  Also add
+a key <tab> that moves the current position to the next unread msg 7/13/05
+FIX Added the keybindings to CursesInterface::Read and ::Select 7/14/05
