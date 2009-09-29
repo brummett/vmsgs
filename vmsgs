@@ -3,6 +3,11 @@
 # vmsgs 2.0 - An improvement for a drop-in replacement for Case's cool
 # clone of msgs(1).
 
+# V 2.93 Enabled use of the arrow keys - added a call to keypad() (main)
+#        Created a wrapper for getch to handle reading from the child on
+#        async reads - should fix random segfaults and bus errors (sigIO,
+#        RealSigIO,GetAKey(new),InitMasterMsgHash).  Prints blank line for
+#        non-existant msgs instead of barfing (PrintMsgInfoLine) 9/11/97
 # V 2.92 Updated header parse function to look for non-whitespace chars
 #        for the author instead of word characters (ParseHeader)
 #        Spread out writes to the screen to look for segfaults 
@@ -124,7 +129,7 @@ $newmessages=0;
 $LOCAL = ! $opt_r;  # Local and remote reading
 $OLDSCHOOL=0;  # For the msgs.pl library
 $0="vmsgs: new and improved";
-$VERSION="2.92 Beta";
+$VERSION="2.93 Beta";
 $CACHE_MSGS = ($opt_c || (! $LOCAL)) && (! $opt_n);
 &DEBUG("\$CACHE_MSGS is $CACHE_MSGS\n");
 $PID=$$;
@@ -151,8 +156,6 @@ if ($LOCAL) {
 &InitializeMsgsAPI();
 $AUTHOR= $LOCAL ? $ENV{'USER'} : &GetLogname();
 
-# &InitAsyncReads();
-
 $msgstat=&InitMsgStat();
 &ReadKillfile();
 &InitMasterMsgHash($msgstat->{currmsg},&GetLines());
@@ -169,8 +172,9 @@ if (! keys(%{$master_msg_hash})) {
 &DEBUG("Starting up Curses...\n");
 $curses_on=1;
 initscr();  # Init curses stuff
-cbreak(); # Don't buffer characters
+halfdelay(1); # Block 1/10 sec when reading a char
 noecho(); # Don't echo received characters
+keypad(1); # Allow function keys and arrow keys
 
 &DEBUG("Setting the alarm\n");
 alarm(60);
@@ -376,6 +380,10 @@ my($current,$lines)=@_;
     &DEBUG("InitMasterMsgHash: Loading msg $msg\n");
     LoadMsg($msg);
     print "." if (! ($msg & 3));
+
+    while ($async_ready) {
+      &RealSigIO();
+    }
   }
 
   print "\n";
@@ -596,6 +604,8 @@ sub GetANumber {
 my($workspace,$msghash)=@_;
 my($char,$numberwin,$lowkey,$highkey);
 
+  &DEBUG("In GetANumber\n");
+
   $lowkey=&GetLowestKey($msghash);
   $highkey=&GetHighestKey($msghash);
 
@@ -608,7 +618,7 @@ my($char,$numberwin,$lowkey,$highkey);
 
     do {
       refresh($numberwin);
-      $char=getch();
+      $char=GetAKey();
       if (($char =~ m/\d/) && (length($workspace)<6) ) {  # Add another number
         addch($numberwin,"$char");
         $workspace=$workspace."$char";
@@ -619,11 +629,13 @@ my($char,$numberwin,$lowkey,$highkey);
         }
       } elsif ($char eq "^[") {  # Cancel out if you hit escape
         delwin($numberwin);
+        &DEBUG("GetANumber returning 0\n");
         return 0;
       }
     } until ($char eq "\n");
 
     if ($workspace eq "") {
+      &DEBUG("GetANumber returning 0\n");
       return 0;
     } elsif ( ($workspace > $highkey) ||
          ($workspace < $lowkey) ) {
@@ -638,6 +650,7 @@ my($char,$numberwin,$lowkey,$highkey);
 #      $workspace="";
     } else {
       delwin($numberwin);
+      &DEBUG("GetANumber returning $workspace\n");
       return $workspace;
     }
   } until (0) # Get out of this loop only with return
@@ -676,22 +689,25 @@ my($screen,$msgnum,$msghash)=@_;
   &DEBUG("printing info for message $msgnum\n");
   attron($screen,A_BOLD) if ($msgnum > $msgstat->{maxmsg});
 
-  if ($DEBUG) {
-    addstr($screen,"$msgnum" . " "x(7-length($msgnum)));
-    addstr($screen,substr($msghash->{$msgnum}->{from},0,20));
-    addstr($screen," "x(20-length($msghash->{$msgnum}->{from})));
-    addstr($screen,substr($msghash->{$msgnum}->{numlines},0,5));
-    addstr($screen," "x(5-length($msghash->{$msgnum}->{numlines})));
-    addstr($screen,substr($msghash->{$msgnum}->{subject},0,48));
+  addstr($screen,"$msgnum" . " "x(7-length($msgnum)));
+  if (! $msghash->{$msgnum}->{from}) {
     addstr($screen,"\n");
   } else {
-    addstr($screen,"$msgnum" . " "x(7-length($msgnum))
-         . substr($msghash->{$msgnum}->{from},0,20)
-         . " "x(20-length($msghash->{$msgnum}->{from}))
-         . substr($msghash->{$msgnum}->{numlines},0,5)
-         . " "x(5-length($msghash->{$msgnum}->{numlines}))
-         . substr($msghash->{$msgnum}->{subject},0,48)
-         . "\n");
+    if ($DEBUG) {
+      addstr($screen,substr($msghash->{$msgnum}->{from},0,20));
+      addstr($screen," "x(20-length($msghash->{$msgnum}->{from})));
+      addstr($screen,substr($msghash->{$msgnum}->{numlines},0,5));
+      addstr($screen," "x(5-length($msghash->{$msgnum}->{numlines})));
+      addstr($screen,substr($msghash->{$msgnum}->{subject},0,48));
+      addstr($screen,"\n");
+    } else {
+      addstr(substr($msghash->{$msgnum}->{from},0,20)
+           . " "x(20-length($msghash->{$msgnum}->{from}))
+           . substr($msghash->{$msgnum}->{numlines},0,5)
+           . " "x(5-length($msghash->{$msgnum}->{numlines}))
+           . substr($msghash->{$msgnum}->{subject},0,48)
+           . "\n");
+    }
   }
 
   attroff($screen,A_BOLD);
@@ -1010,7 +1026,7 @@ local($titlebar,$bottombar,$currentscreen)=();
 do { # until hit a legal key
     $legalkey=0;
     # Read in a key to see what to do next
-    $c=getch();
+    $c=GetAKey();
     if (($c eq " ") || ($c eq "\n")) { # Space or newline
       $legalkey=1;
       $oldnewmsgs=$newmsgs;
@@ -1163,7 +1179,7 @@ SEARCH_TRY_AGAIN:
     refresh($currentscreen);
 
     echo();
-    $searchby=getch($currentscreen,2,53);
+    $searchby=GetAKey();
     noecho();
     if (! ($searchby =~ m/[asw]/i) ) {
       beep();
@@ -1212,7 +1228,7 @@ SEARCH_TRY_AGAIN:
     box($currentscreen,"|","-");
 &DEBUG("refresh 920\n");
     refresh($currentscreen);
-    $key=getch();
+    $key=GetAKey();
 
     delwin($currentscreen);
   } else {
@@ -1347,7 +1363,7 @@ my($msghash)=@_;
       do { # Until we get a legal key
         $legalkey=0;
         # Get a key and do something
-        $c=getch();
+        $c=GetAKey();
 
 &DEBUG("ReadMessage: getch got a \"$c\"\n");
         if ($c =~ m/[fr]/i) { # Followup or Reply
@@ -1509,7 +1525,7 @@ sub PostMessage {
     addstr($currentscreen,2,int($COLS/2)-20,"(Y/N)");
     refresh($currentscreen);
     do {
-      $c=getch();
+      $c=GetAKey();
     } until (($c=~m/n/i) || ($c=~m/y/i));
     if ($c=~m/n/i) {
       unlink($filename);
@@ -1549,7 +1565,7 @@ sub PostMessage {
   refresh($currentscreen);
 
     do {
-    $c=getch();
+    $c=GetAKey();
   } until ($c =~ m/[sf]/i);
 
   if ($c =~ m/s/i) {
@@ -1664,7 +1680,7 @@ my ($msgnum)=@_;
   refresh($currentscreen);
 
   do {
-    $c=getch();
+    $c=GetAKey();
   } until ($c =~ m/[sf]/i);
 &DEBUG("Followup: getch got $c\n");
 
@@ -1770,7 +1786,7 @@ my ($msgnum)=@_;
   refresh($currentscreen);
 
   do {
-    $c=getch();
+    $c=GetAKey();
   } until ($c =~ m/[sf]/i);
 &DEBUG("MailReply: getch got $c\n");
 
@@ -1900,7 +1916,7 @@ You may also enter a number to go directly to that message number
 Hit any key to continue
 ");
     refresh($window);
-    $c=getch();
+    $c=GetAKey();
   } elsif ($mode eq "reading") {
     addstr($window,"
 <space> or <enter> - Go to the next page, or next message if last page
@@ -1916,7 +1932,7 @@ P      - Go to the previous message
 Hit any key to continue
 ");
     refresh($window);
-    $c=getch();
+    $c=GetAKey();
   }
 
   delwin($window);
@@ -1998,28 +2014,6 @@ sub GetLines {
   return 0;
 }
 
-
-sub InitAsyncReads {
-# Creates the child process and communications channels for it
-  
-  socketpair(TOCHILD,TOPARENT,PF_UNIX,SOCK_STREAM,0);
-
-  if ($ASYNC_PID=fork()) {
-    # Parent
-
-    close(TOPARENT);
-
-    return;
-  } else {
-    # Child
-
-    close(TOCHILD);
-
-    &HandleAsyncRead();
-    exit(0);
-  }
-} # end InitAsyncReads
-    
 
 
 
@@ -2139,11 +2133,41 @@ my($msg,$type)=@_;
 }
 
 
+sub GetAKey {
+# Wrapper for getch().  It checks to see if there's an async operation 
+# ready 
+  my($char);
+
+  keypad(1);
+
+  do {
+    $char=getch();
+
+    if ($async_ready) {
+      &RealSigIO();
+    }
+    &DEBUG("GetAKey: \$char $char length " . length($char) . "ERR " . ERR . "\n");
+  } until ($char != -1);
+
+  $char;
+}
+
 sub sigIO {
 # Called when an async read operation completes
+  $async_ready++;
+}
+
+
+sub RealSigIO {
+# Called by GetAKey when there's data ready after an async IO operation
   my($lines,$type,$msg);
 
-  &DEBUG("In sigIO\n");
+  if (!$async_ready <= 0) {
+    &DEBUG("RealSigIO called when nothing ready?!?\n");
+    return;
+  }
+
+  &DEBUG("In RealSigIO\n");
 
   ($type,$msg) = (scalar(<FROMCHILD>) =~ m/^(\w+) (\d+)/);
   &DEBUG("sigIO: \$type $type \$msg $msg\n");
@@ -2151,7 +2175,7 @@ sub sigIO {
   if ($type && ($type ne "done")) {
     $_=<FROMCHILD>;
     while ($_ ne ".\n") {
-      &DEBUG("sigIO: got $_");
+      &DEBUG("RealSigIO: got $_");
       push(@{$lines},$_);
       $_=<FROMCHILD>;
     }
@@ -2161,31 +2185,32 @@ sub sigIO {
     &ParseHeader($msg,$lines);
 
     if ($msgstat->{firstloaded} > $msg) {
-      &DEBUG("sigIO: updating firstloaded to $msg\n");
+      &DEBUG("RealSigIO: updating firstloaded to $msg\n");
       $msgstat->{firstloaded} = $msg;
     } elsif ($msgstat->{lastloaded} < $msg) {
-      &DEBUG("sigIO: updating lastloaded to $msg\n");
+      &DEBUG("RealSigIO: updating lastloaded to $msg\n");
       $msgstat->{lastloaded} = $msg;
     }
 
     $master_msg_hash->{$msg}->{'header'}=$lines;
-    &DEBUG("SigIO: Marking msg $msg not pending\n");
+    &DEBUG("RealSigIO: Marking msg $msg not pending\n");
     $master_msg_hash->{$msg}->{'pending'}=0;
 
   } elsif ($type eq "text") {
     $master_msg_hash->{$msg}->{'numlines'}=scalar(@{$lines});
 
     $master_msg_hash->{$msg}->{$type}=$lines;
-    &DEBUG("SigIO: Marking msg $msg not pending\n");
+    &DEBUG("RealSigIO: Marking msg $msg not pending\n");
     $master_msg_hash->{$msg}->{'pending'}=0;
   } 
 
   if (($type eq "done") || eof(FROMCHILD)) {
-    &DEBUG("sigIO: Child was done\n");
+    &DEBUG("RealSigIO: Child was done\n");
     close(FROMCHILD);
     wait();
-    &DEBUG("sigIO: Clearing Async Lock\n");
+    &DEBUG("RealSigIO: Clearing Async Lock\n");
     $ASYNC_LOCK=0;
+    $async_ready--;
     if ($ALARM_LEFT>0) {
       alarm($ALARM_LEFT);
     } else {
@@ -2193,7 +2218,7 @@ sub sigIO {
     }
   }    
 
-  &DEBUG("Leaving sigIO\n");
+  &DEBUG("Leaving RealSigIO\n");
 }
 
   
