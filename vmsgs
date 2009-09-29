@@ -3,12 +3,20 @@
 # vmsgs 2.0 - An improvement for a drop-in replacement for Case's cool
 # clone of msgs(1).
  
+# V 2.20 Messages are now seperated by 1000s (/var/msgs/13000.dir). 
+#        (CreateMsgsArray, PostMessage, Followup, ReadMessage, IncBoundsFile,
+#        sigalrm, ShouldKillFile, SearchMessages, GetMsgDir2(new)).
+#        Temoprary messages are now stored in the user's home directory
+#        instead of /tmp (PostMessage, Followup).  Now you can mail a reply
+#        to someone's message (SelectMessage, ReadMessage, MailReply(new)).
+#        4/29/97
 # V 2.12 If you put in a blank subject in a new message, it'll ask if you
 #        want to forget the message, like in elm. (PostMessage)  3/12/97
 # V 2.11 Make it so the sig is added before it fires up the editor
 #        (PostMessage, Followup)   3/6/97
 # V 2.1  Added support for a .msgssig file (PostMessage, Followup, 
-#        AppendSig).  Preliminary work started on threading during read mode
+#        AppendSig(new)).  Preliminary work started on threading during read
+#        mode
 # V 2.00 Added 2 columns to the display so there's room for 5-digit msg IDs
 #        (PrintMsgInfoLine).  New msg notification now works correctly
 #        (sigalrm).
@@ -24,7 +32,7 @@
 #        uid kills (ShouldKillfile, CreateMsgsArray, main(), ReadKillfile)
 # V 1.93 Added the -all flag (it'll only read 100 messages prior to the
 #        current message, unless you give it -all. This will speed up startup
-#        time). Added a umask call so msgs are set world-readable (main(),
+#        time). Added a umask call so msgs are set world-readable (main(),.
 #        InitMsgsStat)
 # V 1.92 Fixed a bug where newly arrived messages' dates and lengths were not
 #        parsed correctly (sigalrm). Messages with no body are now handled
@@ -63,7 +71,8 @@ use Curses;
  
 $|=1;
  
-$VERSION="2.12 Release";
+$0="vmsgs: big time sink";
+$VERSION="2.20 Release";
  
 $SIG{'HUP'}=\&aaaaggghhhh;
 $SIG{'INT'}=\&aaaaggghhhh;
@@ -83,7 +92,7 @@ $recurse_select=0;
 
 # Did sigalrm notice any new messages last time through?
 $newmessages=0;
- 
+
 %msgstat=&InitMsgStat();
 &ReadKillfile();
 %master_msg_hash=&CreateMsgsArray();
@@ -137,11 +146,9 @@ local(%msgstat);
  
 sub ReadMsgsrc() {
 # Returns the number that's in the .msgsrc file
-local(@stuff,$rcfile,$homedir,$num);
+local(@stuff,$rcfile,$num);
  
-  @stuff=getpwnam($ENV{'USER'});
-  $homedir=$stuff[7];
-  $rcfile=$homedir . "/.msgsrc";
+  $rcfile=$ENV{'HOME'} . "/.msgsrc";
   open(RC,"$rcfile") || return 1;
   chop($num=<RC>);
   close(RC);
@@ -157,13 +164,11 @@ local(@stuff,$rcfile,$homedir,$num);
 sub WriteMsgsrc {
 # Saves the number passed as the first arg to the .msgsrc file
 local($num)=@_;
-local(@stuff,$rcfile,$homedir);
+local(@stuff,$rcfile);
  
 &DEBUG("In WriteMsgsrc($num)\n");
  
-  @stuff=getpwnam($ENV{'USER'});
-  $homedir=$stuff[7];
-  $rcfile=$homedir . "/.msgsrc";
+  $rcfile=$ENV{'HOME'} . "/.msgsrc";
   open(RC,">$rcfile") || &DEBUG("Can't open $rcfile for writing!");
   print RC "$num\n";
   close(RC);
@@ -172,7 +177,7 @@ local(@stuff,$rcfile,$homedir);
 sub ShouldKillfile {
 # Returns 1 if the given message should be killed
 my($msgnum,$from,$subject,$uid)=@_;
-my($killfrom,$killsubject,$killuid);
+my($killfrom,$killsubject,$killuid,$msgdir2);
 
   my($msgline);
 
@@ -203,7 +208,8 @@ my($killfrom,$killsubject,$killuid);
   if (keys(%kill_any) == ()) {
     return 0;
   } else {
-    open(MSG,"$msgdir/$msgnum");
+    $msgdir2=&GetMsgDir2($msg);
+    open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msgnum");
     while ((!eof(MSG)) && (($_=<MSG>) ne "\n")) { ; } # Skip headers
 
     while ($msgline=<MSG>) {
@@ -224,7 +230,7 @@ sub CreateMsgsArray {
 # It also applies the killfile rules and dosen't add any messages that are
 # killed
 
-my($from,$date,$subject,$uid,$numlines,$msg,$anys,$msgline);
+my($from,$date,$subject,$uid,$numlines,$msg,$anys,$msgline,$msgdir2,$pathname);
 my(@twirly);
 local(%messages);
 
@@ -243,7 +249,10 @@ STATS_MESSAGE:
 
     print "\cH" . $twirly[int($msg/40) % 4] ;
 
-    open(MSG,"$msgdir/$msg") || next;
+    $msgdir2=&GetMsgDir2($msg);
+&DEBUG("\$msgdir2 is $msgdir2  full pathname is $msgdir/$msgdir2/$msg\n");
+&DEBUG("Extended directory location found\n") if (-f "$msgdir/$msgdir2/$msg");
+    open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg") || next;
     $numlines=0;
     while((!eof(MSG)) && (($_ = <MSG>) ne "\n")) { # Read all headers
       chop;
@@ -292,7 +301,7 @@ STATS_MESSAGE:
 sub ReadKillfile {
 # Reads in the killfile .msgskill and creates the %kill_subject, %kill_from
 # and %kill_any arrays
-my(@stuff,$killfile,$homedir);
+my(@stuff,$killfile);
 
   if ($opt_k) {
     &DEBUG("Skipping kill file 'cause of -k switch\n");
@@ -301,9 +310,7 @@ my(@stuff,$killfile,$homedir);
  
   &DEBUG("In ReadKillFile\n");
 
-  @stuff=getpwnam($ENV{'USER'});
-  $homedir=$stuff[7];
-  $killfile=$homedir . "/.msgskill";
+  $killfile=$ENV{'HOME'} . "/.msgskill";
   if (!open(KILL,"$killfile")) {
     &DEBUG("problem opening kill file $killfile: $!\n");
     return;
@@ -798,6 +805,15 @@ do { # until hit a legal key
 #      refresh($currentscreen);
       touchwin($titlebar); refresh($titlebar);
       touchwin($bottombar); refresh($bottombar);
+    } elsif ($c =~ m/m/i) {  # Mail a reply
+      $legalkey=1;
+      &MailReply($msgstat{currmsg});
+      &sigalrm();  # Read new messages into hash
+      if ($recurse_select == 1) {
+        $msghash=\%master_msg_hash;
+      }
+      touchwin($currentscreen);
+      &DisplaySelectScreen($currentscreen,$msgstat{currmsg},$msghash);
     } elsif ($c eq "Q") { # quit all the way
       $legalkey=1;
       $done=1;
@@ -863,6 +879,7 @@ do { # until hit a legal key
       }
       ($firstprinted,$fromtop,$lastprinted)=&DisplaySelectScreen(
                   $currentscreen,$msgstat{currmsg},$msghash);
+      refresh($currentscreen);
     } # end of elsif for entering numbers
 } until ($legalkey);
  
@@ -879,7 +896,7 @@ sub SearchMessages {
 # Given a list of messages to search, it prompts for search criteria
 # Then it calls SelectMessage with the new list
 my($msghash)=@_;
-my($lastmode,$searchby,$key,$msg,%newhash);
+my($lastmode,$searchby,$key,$msg,$msgdir2,%newhash);
 local($currentscreen);
  
   $lastmode=$msgstat{mode};
@@ -923,7 +940,8 @@ SEARCH_TRY_AGAIN:
         $newhash{$msg}=$msghash->{$msg};
       }
     } else { # search by any
-      open(MSG,"$msgdir/$msg");
+      $msgdir2=GetMsgDir2($msg);
+      open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg");
       while(<MSG>) {
         if (m/$key/) {
           $newhash{$msg}=$msghash->{$msg};
@@ -976,7 +994,7 @@ sub ReadMessage {
 # valid messages is passed in as the first arg
 my($msghash)=@_;
  
-  my($numlines,$c,$msgsleft,$timestr,$lastmode,@themessage);
+  my($numlines,$c,$msgsleft,$timestr,$lastmode,@themessage,$msgdir2);
   my($from,$subject,$month,$date,$year,$percentdone,$legalkey,$showheader);
   local($titlebar,$bottombar,$currentscreen);
 
@@ -1012,7 +1030,10 @@ my($msghash)=@_;
     $numlines=0; # How many lines we've printed of this message
  
     # Read in the headers, print them out if $showheader is true
-    open(MSG,"$msgdir/$msgstat{currmsg}");
+    $msgdir2=&GetMsgDir2($msgstat{currmsg});
+    open(MSG,"$msgdir/$msgdir2/$msgstat{currmsg}") ||
+      open(MSG,"$msgdir/$msgstat{currmsg}") ||
+      &DEBUG("problem opening msgdir/$msgdir2/$msgstat{currmsg} or $msgdir/$msgstat{currmsg}\n");
     while((!eof(MSG)) && (($_=<MSG>) ne "\n")) {
       if ($showheader) {
         chop;
@@ -1130,6 +1151,11 @@ do { # Until we get a legal key
           $numlines=0;
         }
         next SHOW_ONE_PAGE;
+      } elsif ($c =~ m/m/i) {  # mail reply
+        $legalkey=1;
+        &MailReply($msgstat{currmsg});
+        refresh($currentscreen);
+        &sigalrm();  # Reread new messages into hash
       } elsif ($c =~ m/h/i) {  # print headers
         $numlines=0;
         $showheader=1;
@@ -1195,8 +1221,8 @@ do { # Until we get a legal key
  
 sub PostMessage {
 # Creates a new message
-  my($pid,$filename,$user,$date,$subject,$msgname,$oldmode);
-  my($numlines,$headerlen,$c);
+  my($pid,$filename,$user,$date,$subject,$msgname,$oldmode,$msgdir2);
+  my($numlines,$headerlen,$c,$umask);
   local($currentscreen);
 
 &DEBUG("In PostMessage\n");
@@ -1205,7 +1231,8 @@ sub PostMessage {
   $msgstat{mode}="post";
 
   $pid=$$;
-  $filename="/tmp/newmsgs.$pid";   # Temporary filename for editing
+  $filename="/$ENV{'HOME'}/newmsgs.$pid";   # Temporary filename for editing
+&DEBUG("Temp filename is $filename\n");
   $user=$ENV{'USER'};
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";  # vi is cooler anyway
@@ -1255,9 +1282,6 @@ sub PostMessage {
   alarm(60);
   noecho();
 
-  # Add on the .sig if it exists
-#  &AppendSig($filename);
-
   $currentscreen=newwin(6,30,int($LINES/2)-3,int($COLS/2)-15);
   attron($currentscreen,A_BOLD);
   addstr($currentscreen,2,3,"S");
@@ -1277,7 +1301,18 @@ sub PostMessage {
 
   if ($c =~ m/s/i) {
     $msgname=&IncBoundsFile();
-    system("mv $filename $msgdir/$msgname");
+    $msgdir2=&GetMsgDir2($msgname);
+&DEBUG("Getting ready to move $filename to $msgdir/$msgdir2/$msgname\n");
+
+    if ( ! -d "$msgdir/$msgdir2") {
+&DEBUG("making a new msgs storage directory $msgdir/$msgdir2\n");
+      $umask=umask();
+      umask(0);
+      mkdir("$msgdir/$msgdir2",03777);
+      umask($umask);
+    }
+
+    system("mv $filename $msgdir/$msgdir2/$msgname");
   } else {
     unlink($filename);
   }
@@ -1292,6 +1327,7 @@ sub Followup {
 my ($msgnum)=@_;
 
   my($pid,$filename,$user,$date,$subject,$c,$msgname,$from,$oldmode);
+  my($umask,$msgdir2);
   local($currentscreen);
 
 &DEBUG("In Followup\n");
@@ -1300,7 +1336,8 @@ my ($msgnum)=@_;
   $msgstat{mode}="followup";
 
   $pid=$$;
-  $filename="/tmp/newmsgs.$pid";
+  $filename="$ENV{'HOME'}/newmsgs.$pid";
+&DEBUG("Temp filename is $filename\n");
   $user=$ENV{'USER'};
   $date=localtime();
   $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";
@@ -1314,7 +1351,8 @@ my ($msgnum)=@_;
     $subject = "Re: $subject";
   }
 
-  open(MSG,"$msgdir/$msgnum");
+  $msgdir2=&GetMsgDir2($msgnum);
+  open(MSG,"$msgdir/$msgdir2/$msgnum") || open(MSG,"$msgdir/$msgnum");
 &DEBUG("Followup: skipping headers for message $msgnum\n");
   while(($_ = <MSG>) && (! m/^\s+$/)) {;} # Skip headers
 
@@ -1348,9 +1386,6 @@ my ($msgnum)=@_;
 
   noecho();
 
-  # Put on the .sig if it exists
-#  &AppendSig($filename);
-  
   $currentscreen=newwin(6,30,int($LINES/2)-3,int($COLS/2)-15);
   attron($currentscreen,A_BOLD);
   addstr($currentscreen,2,3,"S");
@@ -1371,7 +1406,113 @@ my ($msgnum)=@_;
 
   if ($c =~ m/s/i) {
     $msgname=&IncBoundsFile();
-    system("mv $filename $msgdir/$msgname");
+    $msgdir2=&GetMsgDir2($msgname);
+&DEBUG("Getting ready to move $filename to $msgdir/$msgdir2/$msgname\n");
+
+    if (! -d "$msgdir/$msgdir2") {
+&DEBUG("Creating a new msgs storage directory $msgdir/$msgdir2\n");
+      $umask=umask();
+      umask(0);
+      mkdir("$msgdir/$msgdir2",03777);
+      umask($umask);
+    }
+
+    system("mv $filename $msgdir/$msgdir2/$msgname");
+    unlink("$filename");
+  } else {
+    unlink("$filename");
+  }
+  clear($currentscreen);
+&DEBUG("refresh 1326\n");
+  refresh($currentscreen);
+  delwin($currentscreen);
+
+  $msgstat{mode}=$oldmode;
+
+} # end Followup
+
+
+sub MailReply {  # Mails a reply to the current message
+my ($msgnum)=@_;
+
+  my($pid,$filename,$user,$date,$subject,$c,$msgname,$from,$oldmode);
+  my($umask,$msgdir2,$return);
+  local($currentscreen);
+
+&DEBUG("In MailReply($msgnum)\n");
+
+  $oldmode=$msgstat{mode};
+  $msgstat{mode}="mailreply";
+
+  $pid=$$;
+  $filename="$ENV{'HOME'}/newmsgs.$pid";
+&DEBUG("Temp filename is $filename\n");
+  $user=$ENV{'USER'};
+  $date=localtime();
+  $editor=$ENV{'EDITOR'} ? $ENV{'EDITOR'} : "vi";
+
+  $subject=$master_msg_hash{$msgnum}->{subject};
+  if ($subject =~ m/^Re\:(.*)/) {
+    $subject="Re[2]:$1";
+  } elsif ($subject =~ m/^Re\[(\d+)\]\:(.*)/) {
+    $subject="Re[". ($1 + 1) ."]:$2";
+  } else {
+    $subject = "Re: $subject";
+  }
+
+  $msgdir2=&GetMsgDir2($msgnum);
+  open(MSG,"$msgdir/$msgdir2/$msgnum") || open(MSG,"$msgdir/$msgnum");
+&DEBUG("MailReply: skipping headers for message $msgnum\n");
+  while(($_ = <MSG>) && (! m/^\s+$/)) {;} # Skip headers
+
+&DEBUG("MailReply: Creating the followup message\n");
+  open(FILE,">$filename");
+  print FILE "you wrote in msgs:\n";
+
+  while (<MSG>) {
+    print FILE "\> $_";
+    $numlines++;
+  }
+  $numlines += 2;  # Just 'cause
+  print FILE "\n";
+  close(MSG);
+  close(FILE);
+  &AppendSig($filename);
+
+  echo();
+
+  alarm(0);
+&DEBUG("MailReply: execing $editor\n");
+  system("$editor +$numlines $filename");
+&DEBUG("MailReply: back from $editor\n");
+  alarm(60);
+
+  noecho();
+
+  $currentscreen=newwin(6,30,int($LINES/2)-3,int($COLS/2)-15);
+  attron($currentscreen,A_BOLD);
+  addstr($currentscreen,2,3,"S");
+  attroff($currentscreen,A_BOLD);
+  addstr($currentscreen,"end it or ");
+  attron($currentscreen,A_BOLD);
+  addstr($currentscreen,"F");
+  attroff($currentscreen,A_BOLD);
+  addstr($currentscreen,"orget it?");
+  box($currentscreen,"|","-");
+&DEBUG("refresh 1311\n");
+  refresh($currentscreen);
+
+  do {
+    $c=getch();
+  } until ($c =~ m/[sf]/i);
+&DEBUG("MailReply: getch got $c\n");
+
+  if ($c =~ m/s/i) {
+&DEBUG("Getting ready to mail the reply\n");
+    $return=system("elm -s \"$subject\" $master_msg_hash{$msgnum}->{from} < $filename");
+    $return /= 256;
+    unlink("$filename");
+&DEBUG("Back from elm.  Got return code $return\n");
   } else {
     unlink($filename);
   }
@@ -1382,7 +1523,8 @@ my ($msgnum)=@_;
 
   $msgstat{mode}=$oldmode;
 
-} # end Followup
+  &DEBUG("leaving MailReply\n");
+}
  
 sub IncBoundsFile {
 # Increments the upper number in the bounds file. Returns the incremented
@@ -1415,7 +1557,9 @@ sub IncBoundsFile {
   $_=<BOUNDS>;
   ($first,$last)=(m/(\d+)\s(\d+)/);
   seek(BOUNDS,0,0);
-  while(-f "$msgdir/$last") {
+  $msgdir2=&GetMsgDir2($last);
+  while(-f "$msgdir/$msgdir2/$last") {
+    $msgdir2=&GetMsgDir2($last);
     $last++;
   }
 &DEBUG("Writing $first $last to bounds file\n");
@@ -1465,7 +1609,8 @@ my($x,$y)
     $oldlastmsg=$msgstat{lastmsg};
     $msgstat{lastmsg}=&NumMessages();
     foreach $msg ( ($oldlastmsg+1) .. $msgstat{lastmsg} ) {
-      open(MSG,"$msgdir/$msg") || next;
+      $msgdir2=&GetMsgDir2($msg);
+      open(MSG,"$msgdir/$msgdir2/$msg") || open(MSG,"$msgdir/$msg") || next;
       $numlines=0;
       while((!eof(MSG)) && (($_ = <MSG>) ne "\n")) { # Read all headers
         chop;
@@ -1542,8 +1687,9 @@ local($window,$c);
   if (($mode eq "selection") || ($mode eq "SearchSelect")) {
     addstr($window,"
 <space> and <enter> - Read the currently selected message
-N       - Create a new message
+N      - Create a new message
 F or R - Followup to the current message
+M      - Mail a reply to this message
 J      - Go to the next message
 K      - Go the the previous message
 ?      - Get this help screen
@@ -1563,6 +1709,7 @@ Hit any key to continue
 <space> or <enter> - Go to the next page, or next message if last page
 <backspace> - Go back one page
 F or R - Followup to the current message
+M      - Mail a reply to this message
 ?      - Get this help screen
 H      - Print the headers for this message
 S or I - Go back to the message selection screen
@@ -1615,3 +1762,11 @@ my($filename)=@_;
     close(SIG);
   }
 }  # end AppendSig
+
+
+sub GetMsgDir2 {
+# Returns the name of the extended msgs directory where the msg is
+my($msg)=@_;
+
+  return ( ($msg =~ m/(.+)...$/)[0] . "000.dir");
+}
