@@ -1,12 +1,52 @@
 #!/usr/bin/perl
 
-# vmsgs 2.0 - An improvement for a drop-in replacement for Case's cool
+# vmsgs 2.0 - An improvement for a drop-in replacement for Kees' cool
 # clone of msgs(1).
 
-# V 2.95 Tried to fix a bug that dropped out of reading mode before you
-#        were really done reading (ReadMesage).  You can now save a message
-#        to a file (SaveMsg (new)).  You can now pipe a message through a
-#        program (PipeMsg (new)).  Checks for new mail (NewMailP (new)) 2/6/98
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+# Quick info:
+# Signature files are supported.  They're called .msgssig
+# Kill files are supported.  Use the -k command line option to ignore
+#   a kill file already in place.  The kill file is called .msgskill
+#   The format consists of each line having a keyword and a value.  The 
+#   values may be simple text strings, or any valid Perl regex
+#     uid <UserID> - And msgs owned b y that UID are skipped
+#     from <username> - Any msg written by user "username" are skipped.  It
+#       looks in the From header to see who wrote it
+#     subject <text> - Skipps any msgs where <text> appears in the Subject:
+#       header
+#     any <text> - Skipps and msg where <text> appears anywhere in the msg
+# When composing a message, it looks at the MSGS_EDITOR and EDITOR env
+#   variables to tell what editor to run.  If neither is set, it uses vi
+
+############################################################################
+# Revision History
+#
+# V 2.98.1 vmsgs.debug files are now only created in the users home directory
+#        (StartDebug) 9/28/00
+# V 2.98 .msgsrand file is now supported for the "interesting" $0s (PickArgv0)
+#        11/10/99
+# V 2.97 Lines could get cut off if some lines in the post exceeded the 
+#        width of the terminal.  Now, it chops the lines up as it reads
+#        them in to fit ther terminal's width (AsyncRead)  7/14/99
+# V 2.96 Changed a bunch of stuff when we went to the new Lucien machine.
+#        The main problem was that sigalrm-s weren't getting sent any more, so
+#         looking for new messages is now done with polling  4/12/99
+# V 2.95 Added "w" key for writing the current msg to a file (SelectMessage,
+#        ReadMessage, WriteFile(new), GetHomeDir(new), DoHelp) 11/3/98
 # V 2.94 Added scrolling msg display instead of redraw (ReadMessage,
 #        GetCommandLine).  Added support for an rc file (.vmsgsrc) so you
 #        don't have to remember all the command line switches (GetCommandLine)
@@ -92,33 +132,37 @@
 # V 1.03 Fixed a bug in DrawScreen that wouldn't print the name or date
 #        correctly if the message was posted between midnight and noon
 #        (single digit hours). Also, it won't make the subject full of
-#        Re:'s on a reply
+#        Re:'s on a reply  9/23/96
 # V 1.02 Moved around the calls to stty so it dosen't need to be run as often.
 #        Added signal handler for SIGcont.
 # V 1.01 Changed GetAChar so it dosen't echo the character you get.
-#        Added some keypress aliases. Added signal handlers.
-# V 1.00 Original release.
+#        Added some keypress aliases. Added signal handlers.  8/30/96
+# V 1.00 Original release.  8/29/96
 
 #############################################################################
 # Start of main script
 
 $DEBUG=1;
+@argvs=("superfly tnt","gutter trash","likes cake",
+        "kooler than jesus","new wave","get some!",
+        "better than a sharp stick in the eye",
+        "                nosey, aint ya?","the cool one");
 
 # Some initialization stuff
-$|=1;
+#$|=1;
+
+($LAST_SPOOL_READ) = (scalar(localtime()) =~ m/:(\d+):/);
 
 push(@INC,".");  # So we can find msgs.pl if it's in the local directory
 unshift(@INC,"/usr/local/encap/msgs-pack-1.0/lib");
 use Curses;
 use Socket;
-use IPC::Open3;
-use IPC::Open2;
-use Symbol;
 require "msgs.pl";
 require "flush.pl";
 #require "getopts.pl";
 
 umask(022); # World and group readable
+srand();
 
 &StartDebug();
 
@@ -141,14 +185,13 @@ $newmessages=0;
 
 $LOCAL = ! $opt_r;  # Local and remote reading
 $OLDSCHOOL=0;  # For the msgs.pl library
-#$0="vmsgs: new and improved";
-$0="vmsgs: superfly tnt";
-$VERSION="2.95 Beta";
+$0 = &PickArgv0(@argvs);
+#$0=$argvs[ int(rand($#argvs+1)) ];
+$VERSION="2.97";
 $CACHE_MSGS = ($opt_c || (! $LOCAL)) && (! $opt_n);
 &DEBUG("\$CACHE_MSGS is $CACHE_MSGS\n");
 $PID=$$;
 $SERVER=$opt_s if ($opt_s);
-$MAILPATH="/var/spool/mail";
 
 if ($ENV{'MSGS_EDITOR'}) {
   $EDITOR=$ENV{'MSGS_EDITOR'};
@@ -214,13 +257,14 @@ halfdelay(1); # Block 1/10 sec when reading a char
 noecho(); # Don't echo received characters
 keypad(1); # Allow function keys and arrow keys
 
-&DEBUG("Setting the alarm\n");
-alarm(60);
+#&DEBUG("Setting the alarm\n");
+#alarm(60);
 
 
 # Here's where we actually start up the user interface
 &DEBUG("Going to user mode!\n");
 $msgstat->{'mode'}="selection";
+ungetch(ord("\cL"));
 &SelectMessage($master_msg_hash);
 
 &DEBUG("Returned from user mode\n");
@@ -239,6 +283,25 @@ exit(0);
 #############################################################################
 
 
+sub PickArgv0 {
+# Picks a message to display in the ps output.  If a .msgsrand file
+# exists, use those instead of the builtins
+my(@argvs) = @_;
+  my $filename = $ENV{'HOME'} . "/.msgsrand";
+
+  if (-f $filename ) {
+    @argvs = ();
+    open(FILE,$filename);
+    while(<FILE>) {
+      chomp;
+      next unless (m/\S/);  # make sure this isn't a blank line
+      push(@argvs,$_);
+    }
+    close(FILE);
+  }
+
+  "vmsgs: " . $argvs[ int(rand($#argvs+1)) ];
+} # end PickArgv0
 
 sub InitMsgStat {
 # Initializes the msgstat structure which includes:
@@ -295,29 +358,30 @@ my(@stuff,$killfile);
 
   &DEBUG("In ReadKillFile\n");
 
-  $killfile=$ENV{'HOME'} . "/.msgskill";
-  if (!open(KILL,"$killfile")) {
-    &DEBUG("problem opening kill file $killfile: $!\n");
-    return;
-  }
+  if (open(KILL,$ENV{'HOME'} . "/.msgskill") ||
+      open(KILL,$ENV{'HOME'} . "/.killfile")) {
 
-  while(<KILL>) {
-    chop;
-    if (m/^subject (.*)/) {
-      $kill_subject{$1}=1;
-      &DEBUG("killing subject $1\n");
-    } elsif (m/^from (.*)/) {
-      $kill_from{$1}=1;
-      &DEBUG("killing from $1\n");
-    } elsif (m/^any (.*)/) {
-      $kill_any{$1}=1;
-      &DEBUG("killing any $1\n");
-    } elsif (m/uid (.*)/) {
-      $kill_uid{$1}=1;
-      &DEBUG("killing uid $1\n");
+    while(<KILL>) {
+      chop;
+      if (m/^subject (.*)/) {
+        $kill_subject{$1}=1;
+        &DEBUG("killing subject $1\n");
+      } elsif (m/^from (.*)/) {
+        $kill_from{$1}=1;
+        &DEBUG("killing from $1\n");
+      } elsif (m/^any (.*)/) {
+        $kill_any{$1}=1;
+        &DEBUG("killing any $1\n");
+      } elsif (m/uid (.*)/) {
+        $kill_uid{$1}=1;
+        &DEBUG("killing uid $1\n");
+      }
     }
+    close(KILL);
+
+  } else {
+    &DEBUG("problem opening killfile\n");
   }
-  close(KILL);
 } # end ReadKillfile
 
 
@@ -358,9 +422,9 @@ my($killfrom,$killsubject,$killuid,$msgdir2);
   } else {
     my($text);
 
-    $text=&LoadMessage($msg);
+    $text=&LoadBody($msg);
     if ( scalar(@{$text}) == 0) {
-      &DEBUG("GetMessage returned nothing for message $msg\n");
+      &DEBUG("LoadBody returned nothing for message $msg\n");
     }
 
     foreach $msgline ( @{$text} ) {
@@ -604,8 +668,10 @@ my($msg)=@_;
 
 sub StartDebug {
 # opens the debug file for writing
+
+  my $filename = $ENV{'HOME'} . "/vmsgs.debug";
   if ($DEBUG) {
-    open(DEBUG,">vmsgs.debug");
+    open(DEBUG,">$filename");
     select(DEBUG);
     $|=1;
     select(STDOUT);
@@ -634,7 +700,8 @@ sub SetupSignals {
   $SIG{'INT'}=\&aaaaggghhhh;
   $SIG{'TERM'}=\&aaaaggghhhh;
   $SIG{'CONT'}=\&sigcont;
-  $SIG{'ALRM'}=\&sigalrm;
+#  $SIG{'ALRM'}=\&sigalrm;
+#  &DEBUG("sigalrm points to " . $SIG{'ALRM'} . "\n");
 } # end SetupSignals
 
 
@@ -736,11 +803,11 @@ my($screen,$msgnum,$msghash)=@_;
     addstr($screen,"\n");
   } else {
     if ($DEBUG) {
-      addstr($screen,substr($msghash->{$msgnum}->{from},0,20));
-      addstr($screen," "x(20-length($msghash->{$msgnum}->{from})));
+      addstr($screen,substr($msghash->{$msgnum}->{from},0,12));
+      addstr($screen," "x(12-length($msghash->{$msgnum}->{from})));
       addstr($screen,substr($msghash->{$msgnum}->{numlines},0,5));
       addstr($screen," "x(5-length($msghash->{$msgnum}->{numlines})));
-      addstr($screen,substr($msghash->{$msgnum}->{subject},0,48));
+      addstr($screen,substr($msghash->{$msgnum}->{subject},0,52));
       addstr($screen,"\n");
     } else {
       addstr(substr($msghash->{$msgnum}->{from},0,20)
@@ -814,6 +881,8 @@ my($screen,$currmsg,$msghash)=@_;
   $lastprinted=$printmsg-1;
 
 &DEBUG("refresh 508\n");
+  refresh($currentscreen);
+  touchwin($currentscreen);
   refresh($currentscreen);
   return ($firstprinted,$fromtop,$lastprinted);
 } # end DisplaySelectScreen
@@ -1064,11 +1133,17 @@ local($titlebar,$bottombar,$currentscreen)=();
     $newmessages=0;
   }
 
-
 do { # until hit a legal key
     $legalkey=0;
     # Read in a key to see what to do next
-    $c=GetAKey();
+    if (!$DO_ONCE) {
+      &DEBUG("First time, redrawing automaticly\n");
+      $c = "\cL";
+      $DO_ONCE=1;
+    } else {
+      $c=GetAKey();
+    }
+    &DEBUG("\$c is $c ASCII " . ord($c) . "\n");
     if (($c eq " ") || ($c eq "\n")) { # Space or newline
       $legalkey=1;
       $oldnewmsgs=$newmsgs;
@@ -1126,15 +1201,11 @@ do { # until hit a legal key
       delwin($bottombar);
       $recurse_select--;
       return;
-    } elsif ($c =~ m/s/i) {
-      &DEBUG("In (S)ave handler\n");
+    } elsif ($c =~ m/w/i) {  # Write this msg to a file
       $legalkey=1;
-      &SaveMessage($msgstat->{currmsg});
-      refresh($currentscreen);
-    } elsif ($c eq "|") {
-      $legalkey=1;
-      &PipeMessage($msgstat->{currmsg});
-      refresh($currentscreen);
+      &WriteFile($msgstat->{currmsg});
+      touchwin($currentscreen);
+      &DisplaySelectScreen($currentscreen,$msgstat->{currmsg},$msghash);
     } elsif (($c =~ m/j/i) || ($c == KEY_DOWN )) { #Scan forward until we find
       $legalkey=1;
       $c=$msgstat->{currmsg};
@@ -1177,6 +1248,7 @@ do { # until hit a legal key
       touchwin($currentscreen); refresh($currentscreen);
 &DEBUG("SelectMessage: Done redrawing stuff\n");
     } elsif (($c eq "\cL") || ($c eq "\cR")) {
+      &DEBUG("Refreshing display\n");
       $legalkey=1;
       touchwin($titlebar); refresh($titlebar);
       touchwin($bottombar); refresh($bottombar);
@@ -1344,8 +1416,7 @@ my($msghash)=@_;
 
   SHOW_ONE_MESSAGE:
   # Until done reading messages
-  while (($msgstat->{currmsg} <= NumMessages()) &&
-         ($msgstat->{currmsg} >= FirstMessage())) {
+  while ($msgstat->{currmsg} <= $highkey) {
 
 &DEBUG("In ReadMessage:SHOW_ONE_MESSAGE\n");
 
@@ -1464,7 +1535,11 @@ my($msghash)=@_;
         } elsif (($c eq " ") || ($c eq "\n")) {
           $legalkey=1;
           next SHOW_ONE_PAGE;
-        } elsif ($c =~ m/i/i) {  # index
+        } elsif ($c =~ m/w/i) {  # write msg to a file
+          &WriteFile($msgstat->{currmsg});
+          touchwin($currentscreen);
+          refresh($currentscreen);
+        } elsif ($c =~ m/[si]/i) {  # select or index
           $legalkey=1;
           delwin($currentscreen);
           $msgstat->{mode}=$lastmode;
@@ -1519,15 +1594,6 @@ my($msghash)=@_;
             $msgstat->{currmsg}=$c;
             next SHOW_ONE_MESSAGE
           }
-        } elsif ($c =~ m/s/i) {
-          &DEBUG("In (S)ave handler\n");
-          $legalkey=1;
-          &SaveMessage($msgstat->{currmsg});
-          refresh($currentscreen);
-        } elsif ($c eq "|") {
-          $legalkey=1;
-          &PipeMessage($msgstat->{currmsg});
-          refresh($currentscreen);
         }
       } until ($legalkey);
 
@@ -1538,7 +1604,7 @@ my($msghash)=@_;
     $c=$msgstat->{currmsg};
     do {
       $c++;
-    } until ( defined($msghash->{$c}) || ($c > &NumMessages()));
+    } until ( defined($msghash->{$c}) || ($c > $highkey));
 &DEBUG("ReadMessage: next \$msgstat->{currmsg} is $msgstat->{currmsg}\n");
     if (defined($msghash->{$c})) {  # If it changed...
       $msgstat->{currmsg}=$c;
@@ -1559,188 +1625,91 @@ my($msghash)=@_;
 } # end ReadMessage
 
 
-sub SaveMessage {
-# Save a message to a file or Mail folder.  Use = in front of the filename
-# to have it saved into a mail folder
-  my($msg)=@_;
-  my($filename,$len,$c,$line,$whole,$mail);
-  local($currentscreen,*FILE);
 
-&DEBUG("In SaveMessage($msg)\n");
+sub WriteFile {
+# Writes a message to a file
+my($msg)=@_;
+  my($filename,$answer,$stuff,$line);
+  my($win)
 
-  $currentscreen=newwin(5,50,int($LINES/2)-3,int($COLS/2)-25);
-  addstr($currentscreen,0,18,"Save Message");
-  addstr($currentscreen,2,3,"Save to:");
-  clrtoeol($currentscreen);
-  box($currentscreen,"|","-");
-  &DEBUG("refresh 1556\n");
-  refresh($currentscreen);
+&DEBUG("In WriteFile\n");
+
+  $win=newwin(5,50,int($LINES/2)-3,int($COLS/2)-25);
+  addstr($win,1,16,"Write msg to file");
+  addstr($win,2,3,"Filename:");
+  clrtoeol($win);
+  box($win,"|","-");
+  refresh($win);
 
   echo();
-  getstr($currentscreen,2,12,$filename);
-  delwin($currentscreen);
+  getstr($win,2,13,$filename);
   noecho();
+&DEBUG("WriteFile: got $filename\n");
 
-  &DEBUG("user supplied filename is $filename\n");
-
-  # Is this a file name of a mail folder
-  $mail=0;
-  if ($filename =~ m/^=/) {
-    if (-d "$ENV{'HOME'}/Mail") {
-      $filename =~ s/^=/$ENV{'HOME'}\/Mail\//;
-      $mail=1;
-    } else {
-      $filename =~ s/^=//;
+  $filename =~ s/^\s+//;
+  $filename =~ s/\s+$//;
+  if (length($filename)) {
+    if ($filename =~ m/^~/) {
+      $filename=&GetHomeDir($filename);
     }
-  }
-  &DEBUG("filename after Mail munging is $filename\n");
 
-  if (-e $filename && !-w $filename) {
-    &DEBUG("can't save to $filename: $!\n");
-    beep();
-    $len=length($!);
-    $currentscreen=newwin(5,$len+4,int($LINES/2)-3,int($COLS/2-$len/2));
-    clear($currentscreen);
-    box($currentscreen,"|","-");
-    addstr($currentscreen,0,int($COLS/2-$len/2)-3,"Error");
-    addstr($currentscreen,1,int(($COLS/2-$len/2)-(13+length($filename))/2),
-           "Can't save to $filename");
-    addstr($currentscreen,2,2,$!);
-    refresh($currentscreen);
-    $c=&GetAKey();
+    &DEBUG("WriteFile: Opening $filename for appending...\n");
+    if (!open(SAVE,">>$filename")) {
+      &DEBUG("WriteFile: Can't open: $!\n");
+      clear($win);
+      box($win,"|","-");
+      addstr($win,0,19," Error ");
+      addstr($win,1,3,"Cannot open $filename for writing");
+      addstr($win,2,3,$!);
+      beep();
+      refresh($win);     
+      &GetAKey();
+      goto LEAVE_WRITEFILE;
+    }
+
+    $stuff = &LoadHeader($msg);
+    foreach $line (  @{$stuff} ) {
+      &DEBUG("WriteFile: Writing $line");
+      print SAVE "$line";
+    }
+    print SAVE "\n";
+    $stuff = LoadBody($msg);
+    foreach $line ( @$stuff ) {
+      &DEBUG("WriteFile: Writing $line");
+      print SAVE "$line";
+    }
+    print SAVE "\n";
+    close(SAVE);
+  } # end if length($filename)
+
+LEAVE_WRITEFILE:
+  delwin($win);
+&DEBUG("Leaving WriteFile\n");
+} # end WriteFile
+
+
+sub GetHomeDir {
+# Massages the input filename if it starts with ~login
+my($file) = @_;
+  my($name,$dir);
+
+  &DEBUG("In GetHomeDir\n");
+
+  ($name,$file) = ($file =~ m/^~(\S*)(\/.*)/);
+  &DEBUG("GetHomeDir: Split into name $name and file $file\n");
+
+  if (!$name) {
+    $dir = $ENV{'HOME'};
   } else {
-    $whole="";
-    foreach $line (@{&LoadHeader($msg)}) {
-      $whole .= $line;
-    }
-    if ($mail) {
-      $whole .= "To: msgs\nFrom: " . $master_msg_hash->{$msg}->{'from'} . "\nMessage-Id: \<$msg\>\nReturn-Path: " . $master_msg_hash->{$msg}->{'from'} . "\nContent-Type: text\nDate: " . `date -R`;
-    }
-    $whole .= "\n";
-    foreach $line (@{&LoadBody($msg)}) {
-      $whole .= $line;
-    }
-    $whole .= "\n";
-
-    &DEBUG("saving \"$whole\" to $filename\n");
-    open(FILE,">>$filename");
-    if (!print FILE $whole) {
-      &DEBUG("error writing: $!\n");
-    }
-    close(FILE);
-
-    $currentscreen=newwin(5,18,int($LINES/2)-3,int($COLS/2)-9);
-    addstr($currentscreen,2,2,"Message saved");
-    box($currentscreen,"|","-");
-    refresh($currentscreen);
-    &DEBUG("saved message $msg to $filename\n");
-    $c=&GetAKey();
+    $dir = (getpwnam($name))[7] | "~$name";
   }
 
-  delwin($currentscreen);
+  &DEBUG("GetHomeDir: home dir is $dir returning " . $dir . $file . "\n");
+
+  $dir.$file;
+} # end GetHomeDir
+
   
-  &DEBUG("leaving SaveMessage()\n");
-} # end SaveMessage
-
-
-sub PipeMessage {
-  my($msg)=@_;
-  my($command,$c,$READ,$WRITE,$pid);
-  local($currentscreen);
-
-  &DEBUG("entering PipeMessage()\n");
-
-  $currentscreen=newwin(5,60,int($LINES/2)-3,int($COLS/2)-30);
-  addstr($currentscreen,0,20,"Pipe Message");
-  addstr($currentscreen,2,3,"Command:");
-  clrtoeol($currentscreen);
-  box($currentscreen,"|","-");
-  &DEBUG("refresh 1622\n");
-  refresh($currentscreen);
-
-  echo();
-  getstr($currentscreen,2,12,$command);
-  delwin($currentscreen);
-  noecho();
-
-
-  ($c)=($command =~ m/^(\S+)/);
-  if (! -x $c) {
-    &DEBUG("Not executable: $c\n");
-    beep();
-    $currentscreen=newwin(5,30,int($LINES/2)-3,int($COLS/2)-15);
-    box($currentscreen,"|","-");
-    addstr($currentscreen,0,12,"Error");
-    addstr($currentscreen,1,int(length($c)/2)-15,"$c");
-    addstr($currentscreen,2,2,"is not an executable file");
-    &DEBUG("refresh 1643\n");
-    refresh($currentscreen);
-    $c=&GetAKey();
-  } else {
-    &DEBUG("executing $command\n");
-
-    $READ=gensym(); $WRITE=gensym(); 
-    $pid=open3($WRITE,$READ,"",$command);
-    #$pid=open2($READ,$WRITE,$command);
-
-    select((select($WRITE), $|=1)[0]);
-    select((select($READ), $|=1)[0]);
-
-    &DEBUG("PID of $command is $pid\n");
-
-    # encompassing the entire screen
-    $currentscreen=newwin($LINES-2,$COLS,1,0);
-    $ENV{'ROWS'}=$LINES-2;
-    $ENV{'COLUMNS'}=$COLS;
-    clear($currentscreen);
-    refresh($currentscreen);
-
-    if (fork()) {
-      # parent
-
-      foreach (@{&LoadBody($msg)}) {
-        &DEBUG("sending \"$_\"");
-        print $WRITE $_;
-      }
-      &DEBUG("done sending... closing write handle\n");
-      close($WRITE);
-    } else {
-      # child
-
-      $SIG{'HUP'}='DEFAULT';
-      $SIG{'INT'}='DEFAULT';
-      $SIG{'TERM'}='DEFAULT';
-      $SIG{'CONT'}='IGNORE';
-      $SIG{'ALRM'}='IGNORE';
-
-      while(<$READ>) {
-        &DEBUG("got back \"$_\"");
-        addstr($currentscreen,$_);
-        refresh($currentscreen);
-      }
-
-      &DEBUG("Done reading... closing read handle\n");
-      close($READ);
-
-      addstr($currentscreen,"\n**** DONE ****\nPress a key to continue\n");
-      refresh($currentscreen);
-      exit(0);
-    }
-
-    # clean up piped process and child process
-    &DEBUG("waiting...\n");
-    wait();
-    &DEBUG("wait 1 done\n");
-    wait();
-    &DEBUG("wait 2 done\n");
-    $ENV{'ROWS'}=$LINES;
-    
-    $c=&GetAKey();
-  }
-
-  delwin($currentscreen);
-
-} # end PipeMessage
 
 
 sub PostMessage {
@@ -1800,27 +1769,32 @@ sub PostMessage {
   &AppendSig($filename);
 
   echo();
-  alarm(0);  # Turn off the auto refresh
+  #alarm(0);  # Turn off the auto refresh
   system("$EDITOR +6 $filename");  # Edit the file
-  alarm(60);
+  #alarm(60);
   noecho();
 
   $currentscreen=newwin(6,30,int($LINES/2)-3,int($COLS/2)-15);
   attron($currentscreen,A_BOLD);
-  addstr($currentscreen,2,3,"S");
+  addstr($currentscreen,2,5,"S");
   attroff($currentscreen,A_BOLD);
-  addstr($currentscreen,"end it or ");
+  addstr($currentscreen,"end it, ");
   attron($currentscreen,A_BOLD);
   addstr($currentscreen,"F");
   attroff($currentscreen,A_BOLD);
-  addstr($currentscreen,"orget it?");
+  addstr($currentscreen,"orget it,");
+  addstr($currentscreen,3,3,"or ");
+  attron($currentscreen,A_BOLD);
+  addstr($currentscreen,"D");
+  attroff($currentscreen,A_BOLD);
+  addstr($currentscreen,"ump into /dev/null?");
   box($currentscreen,"|","-");
 &DEBUG("refresh 1226\n");
   refresh($currentscreen);
 
     do {
     $c=GetAKey();
-  } until ($c =~ m/[sf]/i);
+  } until ($c =~ m/[sfd]/i);
 
   if ($c =~ m/s/i) {
     open(FILE,"$filename");
@@ -1898,30 +1872,35 @@ my ($msgnum)=@_;
 
   echo();
 
-  alarm(0);
+  #alarm(0);
 &DEBUG("Followup: execing $EDITOR\n");
   system("$EDITOR +$numlines $filename");
 &DEBUG("Followup: back from $EDITOR\n");
-  alarm(60);
+  #alarm(60);
 
   noecho();
 
   $currentscreen=newwin(6,30,int($LINES/2)-3,int($COLS/2)-15);
   attron($currentscreen,A_BOLD);
-  addstr($currentscreen,2,3,"S");
+  addstr($currentscreen,2,5,"S");
   attroff($currentscreen,A_BOLD);
   addstr($currentscreen,"end it or ");
   attron($currentscreen,A_BOLD);
   addstr($currentscreen,"F");
   attroff($currentscreen,A_BOLD);
-  addstr($currentscreen,"orget it?");
+  addstr($currentscreen,"orget it,");
+  addstr($currentscreen,3,3,"or ");
+  attron($currentscreen,A_BOLD);
+  addstr($currentscreen,"D");
+  attroff($currentscreen,A_BOLD);
+  addstr($currentscreen,"ump into /dev/null?");
   box($currentscreen,"|","-");
 &DEBUG("refresh 1311\n");
   refresh($currentscreen);
 
   do {
     $c=GetAKey();
-  } until ($c =~ m/[sf]/i);
+  } until ($c =~ m/[sfd]/i);
 &DEBUG("Followup: getch got $c\n");
 
   if ($c =~ m/s/i) {
@@ -2003,11 +1982,11 @@ my ($msgnum)=@_;
 
   echo();
 
-  alarm(0);
+  #alarm(0);
 &DEBUG("MailReply: execing $EDITOR\n");
   system("$EDITOR +$numlines $filename");
 &DEBUG("MailReply: back from $EDITOR\n");
-  alarm(60);
+  #alarm(60);
 
   noecho();
 
@@ -2081,7 +2060,7 @@ sub sigcont {
   if (! -f "/tmp/newmsgs.$$") {
     noecho();
     cbreak();
-    alarm(60);
+    #alarm(60);
   }
 }
 
@@ -2091,7 +2070,7 @@ sub sigalrm {
   my($count,$header,$text,$oldlastmsg,$num);
 
 &DEBUG("In sigalrm\n");
-  alarm(0);
+  #alarm(0);
 
   if ($msgstat->{'lastmsg'} > $msgstat->{'lastloaded'}) {
     foreach ( 1 .. 5 ) {
@@ -2108,8 +2087,11 @@ sub sigalrm {
 
     $newmessages=1;
     if ($msgstat->{mode} eq "selection") {
+      &DEBUG("Displaying new msgs in sigalrm\n");
       &DisplaySelectScreen($currentscreen,$msgstat->{currmsg},
                            $master_msg_hash);
+      &DEBUG("** ungetch-ing a ^L\n");
+      ungetch(ord("\cL"));
     }
 
   } elsif ($msgstat->{'lastmsg'} != ($num = &NumMessages())) {
@@ -2122,13 +2104,16 @@ sub sigalrm {
 
     $newmessages=1;
     if ($msgstat->{mode} eq "selection") {
+      &DEBUG("Displaying new msgs in sigalrm\n");
       &DisplaySelectScreen($currentscreen,$msgstat->{currmsg},
                            $master_msg_hash);
+      &DEBUG("** ungetch-ing a ^L\n");
+      ungetch(ord("\cL"));
     }
   } # end elsif
 
   &DEBUG("Leaving sigalrm\n");
-  alarm(60);
+  #alarm(60);
 } # end sigalrm
     
 
@@ -2146,8 +2131,7 @@ local($window,$c);
 n      - Create a new message
 f or r - Followup to the current message
 m      - Mail a reply to this message
-s      - Save this message to a file or Mail folder
-|      - Pipe this message through an external command
+w      - Write this message to a file
 j      - Go to the next message
 k      - Go the the previous message
 C      - Catch up to all messages
@@ -2169,11 +2153,10 @@ Hit any key to continue
 <backspace> - Go back one page
 f or r - Followup to the current message
 m      - Mail a reply to this message
-s      - Save this message to a file or Mail folder
-|      - Pipe this message through an external command
+w      - Write this message to a file
 ?      - Get this help screen
 h      - Print the headers for this message
-i      - Go back to the message selection screen (index)
+s or i - Go back to the message selection screen
 n      - Go to the next message
 p      - Go to the previous message
 
@@ -2278,7 +2261,7 @@ sub GetLines {
   &DEBUG("GetLines: wierd stty reply.  Returning 0\n");
   close(FILE);
   return 0;
-}
+} # end GetLines
 
 
 
@@ -2289,7 +2272,7 @@ sub AsyncRead {
 # background.  Only one read ahead operation is allowed at a time.  When
 # the read ahead is done, it sends the parent a SIGUSR2
 my($msg,$type)=@_;
-  my($thingy,$timeleft);
+  my($thingy,$timeleft,$thing2,@thingy);
 
   &DEBUG("In AsyncRead\($msg,$type\)\n");
 
@@ -2303,10 +2286,20 @@ my($msg,$type)=@_;
   }
 
   if ($type eq "header") {
-    $thingy=[ &GetHeader($msg) ];
+    @thingy=&GetHeader($msg);
   } elsif ($type eq "text") {
-    $thingy=[ &GetBody($msg) ];
+    @thingy=&GetBody($msg);
   }
+
+  # Break-up for lines that are longer than the width of the terminal
+  foreach $thingy2 ( @thingy ) {
+    if (length($thingy2) > $COLS) {
+      push(@$thingy, substr($thingy2, 0, $COLS));  # push the first of the string
+      substr($thingy2, 0, $COLS) = "";   # chop off what we pushed
+    }
+    push(@$thingy, $thingy2);   # now push anyhting that's left
+  } # end foreach
+
 
   if ((!$CACHE_MSGS) || (! scalar(@{$thingy}))) {   # If not caching...
     return $thingy;     # we don't do any readahead
@@ -2398,31 +2391,25 @@ my($msg,$type)=@_;
     
     exit(0);
   }
-}
+} # end AsyncRead
 
-
-sub NewMailP {
-# Checks to see if there's new mail
-
-  if (-A "$MAILPATH/$ENV{'LOGNAME'}" == -M "$MAILPATH/$ENV{'LOGNAME'}") {
-    beep();
-    addstr($bottombar,0,50,"New Mail");
-  }
-}
 
 sub GetAKey {
 # Wrapper for getch().  It checks to see if there's an async operation 
 # ready 
-  my($char);
+  my($char,$min);
 
-  keypad(1);
+  #keypad(1);
+
 
   do {
     $char=getch();
 
-    if (($msgstat->{'mode'} eq "selection") ||
-        ($msgstat->{'mode'} eq "SearchSelect")) {
-      NewMailP();
+    ($min) = (scalar(localtime()) =~ m/:(\d+):/);
+    if ($min != $LAST_SPOOL_READ) {
+      &DEBUG("min changed to $min... sigalrm-ing\n");
+      &sigalrm();
+      $LAST_SPOOL_READ = $min;
     }
 
     if ($async_ready) {
@@ -2432,7 +2419,7 @@ sub GetAKey {
   } until ($char != -1);
 
   $char;
-}
+} # end GetAKey
 
 sub sigIO {
 # Called when an async read operation completes
@@ -2496,11 +2483,11 @@ sub RealSigIO {
     &DEBUG("RealSigIO: Clearing Async Lock\n");
     $ASYNC_LOCK=0;
     $async_ready--;
-    if ($ALARM_LEFT>0) {
-      alarm($ALARM_LEFT);
-    } else {
-      alarm(60);
-    }
+    #if ($ALARM_LEFT>0) {
+    #  alarm($ALARM_LEFT);
+    #} else {
+    #  alarm(60);
+    #}
   }    
 
   &DEBUG("Leaving RealSigIO\n");
